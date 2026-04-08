@@ -30,11 +30,27 @@ class CharacterSpec:
     rarity: Rarity
     roll_weight: int
     rich_style: str
+    healthy_weight_min: int
+    healthy_weight_max: int
 
 
 CHARACTER_POOL: tuple[CharacterSpec, ...] = (
-    CharacterSpec(character_id="Cat", rarity=Rarity.COMMON, roll_weight=80, rich_style="bright_cyan"),
-    CharacterSpec(character_id="Fox", rarity=Rarity.RARE, roll_weight=20, rich_style="bright_magenta"),
+    CharacterSpec(
+        character_id="Cat",
+        rarity=Rarity.COMMON,
+        roll_weight=80,
+        rich_style="bright_cyan",
+        healthy_weight_min=3,
+        healthy_weight_max=26,
+    ),
+    CharacterSpec(
+        character_id="Fox",
+        rarity=Rarity.RARE,
+        roll_weight=20,
+        rich_style="bright_magenta",
+        healthy_weight_min=2,
+        healthy_weight_max=20,
+    ),
 )
 
 _CHARACTER_RARITY: dict[str, Rarity] = {spec.character_id: spec.rarity for spec in CHARACTER_POOL}
@@ -43,6 +59,13 @@ _CHARACTER_WEIGHTS: tuple[tuple[str, int], ...] = tuple(
 )
 
 CHARACTER_STYLE_BY_NAME: dict[str, str] = {spec.character_id: spec.rich_style for spec in CHARACTER_POOL}
+
+
+def healthy_weight_bounds(character_id: str) -> tuple[int, int]:
+    for spec in CHARACTER_POOL:
+        if spec.character_id == character_id:
+            return (spec.healthy_weight_min, spec.healthy_weight_max)
+    return (3, 26)
 
 
 def rarity_for_character(character_id: str) -> Rarity:

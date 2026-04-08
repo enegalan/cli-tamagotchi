@@ -29,3 +29,7 @@ class PetStorage:
         self.ensure_dir()
         serialized_state = json.dumps(pet_state.to_dict(), indent=2)
         self.pet_path.write_text(serialized_state + "\n", encoding="utf-8")
+
+    def can_create_new_pet(self, current_pet: PetState) -> bool:
+        """Single-slot save: a new egg is only allowed when the current record is not alive."""
+        return not current_pet.is_alive

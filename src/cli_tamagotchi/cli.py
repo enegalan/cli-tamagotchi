@@ -6,15 +6,15 @@ import select
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Optional, TextIO
+from typing import Callable, Optional, Sequence, TextIO
 
 from rich.console import Console
 from rich.live import Live
 from rich.text import Text
 
-from .engine import apply_action, create_new_pet, reconcile_state
+from .engine import apply_action, create_new_pet, pick_random_pet_name, reconcile_state
 from .models import PetState
-from .render import render_interactive_view, render_status
+from .render import _lights_action_name, render_interactive_view, render_status
 from .storage import PetStorage
 
 try:
@@ -24,24 +24,32 @@ except ImportError:  # pragma: no cover
     termios = None
     tty = None
 
-SUPPORTED_ACTIONS = ("feed", "play", "lights", "clean")
+SUPPORTED_ACTIONS = ("feed", "play", "lights", "clean", "medicine")
 EVENT_WINDOW_SIZE = 6
 NO_ACTION = "__no_action__"
 IDLE_POLL_NO_INPUT = "idle_poll"
 INTERACTIVE_IDLE_TIMEOUT_SECONDS = 0.3
-ACTION_GRID = (
-    ("feed", "play"),
-    ("lights", "clean"),
-    ("status", "quit"),
-)
+
+
+def build_action_grid(pet_state: PetState, storage: PetStorage) -> tuple[tuple[str | None, str | None], ...]:
+    if pet_state.is_alive:
+        return (
+            ("feed", "play"),
+            (_lights_action_name(pet_state), "clean"),
+            ("medicine", "quit"),
+        )
+    if storage.can_create_new_pet(pet_state):
+        return (("new_pet", "quit"),)
+    return (("quit", None),)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="tama", description="Care for your terminal pet.")
     parser.add_argument(
         "--name",
-        default="Byte",
-        help="Name for a new pet created on first launch.",
+        default=None,
+        metavar="NAME",
+        help="Pet name; skips the name prompt when creating. Empty value picks a random name.",
     )
 
     subparsers = parser.add_subparsers(dest="command")
@@ -50,6 +58,8 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("play", help="Play with your pet.")
     subparsers.add_parser("lights", help="Toggle the lights on or off.")
     subparsers.add_parser("clean", help="Clean your pet's space.")
+    subparsers.add_parser("medicine", help="Give medicine (cooldown 1h, cures illness, restores health).")
+    subparsers.add_parser("new", help="Start a new pet (only if none is alive).")
     return parser
 
 
@@ -68,7 +78,20 @@ def main(
     storage = storage or PetStorage(base_dir=_storage_dir_from_env())
     console = Console(file=output, width=100)
 
-    pet_state = load_or_create_pet(storage, now_provider(), args.name)
+    pet_state = load_or_create_pet(
+        storage, now_provider(), args.name, output=output, input_stream=input_stream
+    )
+
+    if args.command == "new":
+        if pet_state.is_alive:
+            console.print("A pet is already alive. You can only have one living pet.", style="bold red")
+            return 1
+        new_name = name_from_flag_or_prompt(args.name, output, input_stream)
+        pet_state = create_new_pet(now=now_provider(), name=new_name)
+        storage.save(pet_state)
+        console.print(f"A new pet, {pet_state.name}, has hatched.", style="bold green")
+        console.print(render_status(pet_state, compact=True, animation_time=now_provider()))
+        return 0
 
     if not args.command:
         return run_interactive_loop(
@@ -78,6 +101,7 @@ def main(
             console=console,
             output=output,
             input_stream=input_stream,
+            explicit_pet_name=args.name,
         )
 
     if args.command == "status":
@@ -92,10 +116,50 @@ def main(
     return 0
 
 
-def load_or_create_pet(storage: PetStorage, now: datetime, pet_name: str) -> PetState:
+def name_from_flag_or_prompt(
+    explicit_flag: Optional[str],
+    output: TextIO,
+    input_stream: TextIO,
+    *,
+    live: Optional[Live] = None,
+) -> str:
+    if explicit_flag is not None:
+        stripped_flag = explicit_flag.strip()
+        return stripped_flag if stripped_flag else pick_random_pet_name()
+    if live is not None:
+        live.stop()
+    try:
+        return _prompt_pet_name_line(output, input_stream)
+    finally:
+        if live is not None:
+            live.start(refresh=True)
+
+
+def _prompt_pet_name_line(output: TextIO, input_stream: TextIO) -> str:
+    input_is_tty = bool(getattr(input_stream, "isatty", lambda: False)())
+    if not input_is_tty:
+        return pick_random_pet_name()
+    output.write("\nPet name (Enter for random): ")
+    output.flush()
+    line = input_stream.readline()
+    if not line:
+        return pick_random_pet_name()
+    stripped_line = line.strip()
+    return stripped_line if stripped_line else pick_random_pet_name()
+
+
+def load_or_create_pet(
+    storage: PetStorage,
+    now: datetime,
+    pet_name: Optional[str],
+    *,
+    output: TextIO,
+    input_stream: TextIO,
+) -> PetState:
     pet_state = storage.load()
     if pet_state is None:
-        pet_state = create_new_pet(now=now, name=pet_name)
+        resolved_name = name_from_flag_or_prompt(pet_name, output, input_stream)
+        pet_state = create_new_pet(now=now, name=resolved_name)
     else:
         reconcile_state(pet_state, now)
 
@@ -110,6 +174,7 @@ def run_interactive_loop(
     console: Console,
     output: TextIO,
     input_stream: TextIO,
+    explicit_pet_name: Optional[str],
 ) -> int:
     status_message: Optional[Text] = None
     selected_position = (0, 0)
@@ -122,27 +187,34 @@ def run_interactive_loop(
             console=console,
             output=output,
             input_stream=input_stream,
+            explicit_pet_name=explicit_pet_name,
         )
 
     with Live(
         render_interactive_view(
             pet_state,
-            _action_at_position(selected_position),
+            _highlight_key_at_position(build_action_grid(pet_state, storage), selected_position),
             event_offset=event_offset,
             animation_time=now_provider(),
+            action_rows=build_action_grid(pet_state, storage),
         ),
         console=console,
         screen=True,
         auto_refresh=False,
     ) as live:
         while True:
+            current_time = now_provider()
+            reconcile_state(pet_state, current_time)
+            action_grid = build_action_grid(pet_state, storage)
+            selected_position = _clamp_selection(action_grid, selected_position)
             live.update(
                 render_interactive_view(
                     pet_state,
-                    _action_at_position(selected_position),
+                    _highlight_key_at_position(action_grid, selected_position),
                     event_offset=event_offset,
                     status_message=status_message,
-                    animation_time=now_provider(),
+                    animation_time=current_time,
+                    action_rows=action_grid,
                 ),
                 refresh=True,
             )
@@ -159,7 +231,7 @@ def run_interactive_loop(
                 continue
 
             if raw_action in ("up", "down", "left", "right"):
-                selected_position = _move_selection(selected_position, raw_action)
+                selected_position = _move_selection(action_grid, selected_position, raw_action)
                 continue
             if raw_action == "events_up":
                 event_offset = _move_event_offset(pet_state, event_offset, EVENT_WINDOW_SIZE, -1)
@@ -168,32 +240,49 @@ def run_interactive_loop(
                 event_offset = _move_event_offset(pet_state, event_offset, EVENT_WINDOW_SIZE, 1)
                 continue
             if raw_action == "select":
-                command = _action_at_position(selected_position)
+                command = _command_from_grid_cell(
+                    _grid_value_at_position(action_grid, selected_position)
+                )
             else:
                 command = _normalize_action_input(raw_action)
                 if command is None:
                     status_message = Text("Unknown action.", style="bold red")
                     continue
 
+            if command == "":
+                status_message = Text("Select a highlighted action.", style="yellow")
+                continue
+
             if command in ("quit", "exit"):
                 storage.save(pet_state)
                 live.update(
                     render_interactive_view(
                         pet_state,
-                        _action_at_position(selected_position),
+                        _highlight_key_at_position(action_grid, selected_position),
                         event_offset=event_offset,
                         status_message=Text("Goodbye.", style="bold cyan"),
                         animation_time=now_provider(),
+                        action_rows=action_grid,
                     ),
                     refresh=True,
                 )
                 return 0
 
-            if command == "status":
-                reconcile_state(pet_state, now_provider())
+            if command == "new_pet":
+                if pet_state.is_alive:
+                    status_message = Text("You already have a living pet.", style="bold red")
+                    continue
+                if not storage.can_create_new_pet(pet_state):
+                    status_message = Text("Cannot start a new pet right now.", style="bold red")
+                    continue
+                hatch_name = name_from_flag_or_prompt(
+                    explicit_pet_name, output, input_stream, live=live
+                )
+                pet_state = create_new_pet(now_provider(), hatch_name)
                 storage.save(pet_state)
                 event_offset = _default_event_offset(pet_state, EVENT_WINDOW_SIZE)
-                status_message = None
+                selected_position = (0, 0)
+                status_message = Text(f"{pet_state.name} hatched! A fresh start.", style="bold green")
                 continue
 
             result = apply_action(pet_state, command, now_provider())
@@ -223,18 +312,23 @@ def _run_interactive_loop_fallback(
     console: Console,
     output: TextIO,
     input_stream: TextIO,
+    explicit_pet_name: Optional[str],
 ) -> int:
     status_message: Optional[Text] = None
     selected_position = (0, 0)
     event_offset = _default_event_offset(pet_state, EVENT_WINDOW_SIZE)
 
     while True:
+        reconcile_state(pet_state, now_provider())
+        action_grid = build_action_grid(pet_state, storage)
+        selected_position = _clamp_selection(action_grid, selected_position)
         console.print(
             render_interactive_view(
                 pet_state,
-                _action_at_position(selected_position),
+                _highlight_key_at_position(action_grid, selected_position),
                 event_offset=event_offset,
                 status_message=status_message,
+                action_rows=action_grid,
             )
         )
 
@@ -252,23 +346,37 @@ def _run_interactive_loop_fallback(
             event_offset = _move_event_offset(pet_state, event_offset, EVENT_WINDOW_SIZE, 1)
             continue
         if raw_action == "select":
-            command = _action_at_position(selected_position)
+            command = _command_from_grid_cell(
+                _grid_value_at_position(action_grid, selected_position)
+            )
         else:
             command = _normalize_action_input(raw_action)
             if command is None:
                 status_message = Text("Unknown action.", style="bold red")
                 continue
 
+        if command == "":
+            status_message = Text("Select a highlighted action.", style="yellow")
+            continue
+
         if command in ("quit", "exit"):
             storage.save(pet_state)
             console.print("Goodbye.", style="bold cyan")
             return 0
 
-        if command == "status":
-            reconcile_state(pet_state, now_provider())
+        if command == "new_pet":
+            if pet_state.is_alive:
+                status_message = Text("You already have a living pet.", style="bold red")
+                continue
+            if not storage.can_create_new_pet(pet_state):
+                status_message = Text("Cannot start a new pet right now.", style="bold red")
+                continue
+            hatch_name = name_from_flag_or_prompt(explicit_pet_name, output, input_stream)
+            pet_state = create_new_pet(now_provider(), hatch_name)
             storage.save(pet_state)
             event_offset = _default_event_offset(pet_state, EVENT_WINDOW_SIZE)
-            status_message = None
+            selected_position = (0, 0)
+            status_message = Text(f"{pet_state.name} hatched! A fresh start.", style="bold green")
             continue
 
         result = apply_action(pet_state, command, now_provider())
@@ -388,7 +496,7 @@ def _read_key_from_descriptor(file_descriptor: int) -> Optional[str]:
 def _normalize_action_input(raw_command: str) -> Optional[str]:
     normalized_command = raw_command.strip().lower()
     if not normalized_command:
-        return "status"
+        return None
 
     if normalized_command in SUPPORTED_ACTIONS:
         return normalized_command
@@ -399,40 +507,83 @@ def _normalize_action_input(raw_command: str) -> Optional[str]:
     if normalized_command in ("pagedown", "pgdown", "events-down", "events_down"):
         return "events_down"
 
-    if normalized_command in ("status", "quit", "exit"):
+    if normalized_command in ("quit", "exit"):
         return normalized_command
+
+    if normalized_command in ("new_pet", "new pet", "new"):
+        return "new_pet"
 
     return None
 
 
-def _move_selection(current_position: tuple[int, int], direction: str) -> tuple[int, int]:
+def _snap_column_to_action(
+    action_grid: Sequence[Sequence[Optional[str]]],
+    row_index: int,
+    preferred_column: int,
+) -> int:
+    row = action_grid[row_index]
+    safe_column = max(0, min(preferred_column, len(row) - 1))
+    if row[safe_column] is not None:
+        return safe_column
+    for column_index, cell in enumerate(row):
+        if cell is not None:
+            return column_index
+    return 0
+
+
+def _clamp_selection(
+    action_grid: Sequence[Sequence[Optional[str]]],
+    position: tuple[int, int],
+) -> tuple[int, int]:
+    if not action_grid:
+        return (0, 0)
+    row_index = max(0, min(position[0], len(action_grid) - 1))
+    column_index = max(0, min(position[1], len(action_grid[row_index]) - 1))
+    column_index = _snap_column_to_action(action_grid, row_index, column_index)
+    return (row_index, column_index)
+
+
+def _move_selection(
+    action_grid: Sequence[Sequence[Optional[str]]],
+    current_position: tuple[int, int],
+    direction: str,
+) -> tuple[int, int]:
     row_index, column_index = current_position
 
     if direction == "up":
         row_index = max(0, row_index - 1)
     elif direction == "down":
-        row_index = min(len(ACTION_GRID) - 1, row_index + 1)
+        row_index = min(len(action_grid) - 1, row_index + 1)
     elif direction == "left":
         column_index = max(0, column_index - 1)
     elif direction == "right":
-        column_index = min(len(ACTION_GRID[row_index]) - 1, column_index + 1)
+        column_index = min(len(action_grid[row_index]) - 1, column_index + 1)
 
-    if _grid_value_at_position((row_index, column_index)) is None:
-        column_index = 0
-
+    column_index = _snap_column_to_action(action_grid, row_index, column_index)
     return (row_index, column_index)
 
 
-def _action_at_position(position: tuple[int, int]) -> str:
-    selected_action = _grid_value_at_position(position)
-    if selected_action is None:
-        return "quit"
-    return selected_action
+def _command_from_grid_cell(cell: Optional[str]) -> str:
+    if not cell:
+        return ""
+    if cell in ("lights_on", "lights_off"):
+        return "lights"
+    return cell
 
 
-def _grid_value_at_position(position: tuple[int, int]) -> Optional[str]:
+def _highlight_key_at_position(
+    action_grid: Sequence[Sequence[Optional[str]]],
+    position: tuple[int, int],
+) -> str:
+    return _command_from_grid_cell(_grid_value_at_position(action_grid, position))
+
+
+def _grid_value_at_position(
+    action_grid: Sequence[Sequence[Optional[str]]],
+    position: tuple[int, int],
+) -> Optional[str]:
     row_index, column_index = position
-    return ACTION_GRID[row_index][column_index]
+    return action_grid[row_index][column_index]
 
 
 def _default_event_offset(pet_state: PetState, event_window_size: int) -> int:

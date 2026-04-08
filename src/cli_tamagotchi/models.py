@@ -4,7 +4,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
-from .characters import CHARACTER_STYLE_BY_NAME, FALLBACK_CHARACTER
+from .characters import CHARACTER_STYLE_BY_NAME
+from .illnesses import illness_from_value
 
 MAX_LOG_EVENTS = 50
 REACTION_ANIMATION_WINDOW = timedelta(seconds=2.8)
@@ -46,6 +47,28 @@ class EventEntry:
 
 
 @dataclass
+class ActiveIllness:
+    illness_id: str
+    ticks_remaining: int | None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "illness_id": self.illness_id,
+            "ticks_remaining": self.ticks_remaining,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "ActiveIllness":
+        raw_ticks = payload.get("ticks_remaining")
+        ticks: int | None
+        if raw_ticks is None:
+            ticks = None
+        else:
+            ticks = int(raw_ticks)
+        return cls(illness_id=str(payload["illness_id"]), ticks_remaining=ticks)
+
+
+@dataclass
 class PetState:
     name: str
     character: str
@@ -54,6 +77,7 @@ class PetState:
     hunger: int
     happiness: int
     health: int
+    energy: int
     is_asleep: bool
     is_alive: bool
     dirtiness: int
@@ -64,12 +88,17 @@ class PetState:
     last_interaction_at: datetime
     last_tick_at: datetime
     events: list[EventEntry] = field(default_factory=list)
+    active_illnesses: list[ActiveIllness] = field(default_factory=list)
+    last_medicine_at: datetime | None = None
 
     def add_event(self, message: str, now: datetime) -> None:
         self.events.append(EventEntry(timestamp=now, message=message))
         if len(self.events) > MAX_LOG_EVENTS:
             self.events = self.events[-MAX_LOG_EVENTS:]
         self.updated_at = now
+
+    def has_illness_id(self, illness_id: str) -> bool:
+        return any(entry.illness_id == illness_id for entry in self.active_illnesses)
 
     def average_stats(self) -> int:
         return round((self.hunger + self.happiness + self.health) / 3)
@@ -122,6 +151,7 @@ class PetState:
             "hunger": self.hunger,
             "happiness": self.happiness,
             "health": self.health,
+            "energy": self.energy,
             "is_asleep": self.is_asleep,
             "is_alive": self.is_alive,
             "dirtiness": self.dirtiness,
@@ -132,26 +162,53 @@ class PetState:
             "last_interaction_at": self.last_interaction_at.isoformat(),
             "last_tick_at": self.last_tick_at.isoformat(),
             "events": [event.to_dict() for event in self.events],
+            "active_illnesses": [entry.to_dict() for entry in self.active_illnesses],
+            "last_medicine_at": self.last_medicine_at.isoformat() if self.last_medicine_at else None,
         }
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "PetState":
+        last_medicine_raw = payload.get("last_medicine_at")
+        last_medicine_at = datetime.fromisoformat(last_medicine_raw) if last_medicine_raw else None
+
+        active_illnesses = [ActiveIllness.from_dict(item) for item in payload["active_illnesses"]]
+        active_illnesses = _sanitize_active_illnesses(active_illnesses)
+
         return cls(
             name=payload["name"],
-            character=payload.get("character", FALLBACK_CHARACTER),
+            character=payload["character"],
             stage=payload["stage"],
-            weight=max(0, int(payload.get("weight", 5))),
+            weight=max(0, int(payload["weight"])),
             hunger=clamp_stat(payload["hunger"]),
             happiness=clamp_stat(payload["happiness"]),
             health=clamp_stat(payload["health"]),
+            energy=clamp_stat(int(payload["energy"])),
             is_asleep=bool(payload["is_asleep"]),
             is_alive=bool(payload["is_alive"]),
             dirtiness=max(0, min(3, int(payload["dirtiness"]))),
             awake_minutes=max(0, int(payload["awake_minutes"])),
             created_at=datetime.fromisoformat(payload["created_at"]),
-            stage_started_at=datetime.fromisoformat(payload.get("stage_started_at", payload["created_at"])),
+            stage_started_at=datetime.fromisoformat(payload["stage_started_at"]),
             updated_at=datetime.fromisoformat(payload["updated_at"]),
             last_interaction_at=datetime.fromisoformat(payload["last_interaction_at"]),
             last_tick_at=datetime.fromisoformat(payload["last_tick_at"]),
             events=[EventEntry.from_dict(event) for event in payload.get("events", list())],
+            active_illnesses=active_illnesses,
+            last_medicine_at=last_medicine_at,
         )
+
+
+def _sanitize_active_illnesses(entries: list[ActiveIllness]) -> list[ActiveIllness]:
+    cleaned: list[ActiveIllness] = list()
+    seen: set[str] = set()
+    for entry in entries:
+        if entry.illness_id in seen:
+            continue
+        ill = illness_from_value(entry.illness_id)
+        if ill is None:
+            continue
+        if entry.ticks_remaining is not None and entry.ticks_remaining <= 0:
+            continue
+        seen.add(entry.illness_id)
+        cleaned.append(entry)
+    return cleaned

@@ -11,32 +11,32 @@ REACTION_FRAME_INTERVAL_MS = 400
 _CAT_SPRITES = {
     STAGE_EGG: {
         "happy": [
-            ["   ____   ", "  / ^ ^\\  ", " / /  \\_\\ ", " \\ \\__/ / ", "  \\____/  "],
-            ["   ____   ", "  / o o\\  ", " / /  \\_\\ ", " \\ \\__/ / ", "  \\____/  "],
+            ["   ____   ", "  /    \\  ", " / /  \\ \\ ", " \\ \\__/ / ", "  \\____/  "],
+            ["   ____   ", "  /    \\  ", " / /  \\ \\ ", " \\ \\__/ / ", "  \\____/  "],
         ],
         "neutral": [
-            ["   ____   ", "  / . .\\  ", " / /  \\_\\ ", " \\ \\__/ / ", "  \\____/  "],
-            ["   ____   ", "  / - -\\  ", " / /  \\_\\ ", " \\ \\__/ / ", "  \\____/  "],
+            ["   ____   ", "  /    \\  ", " / /  \\ \\ ", " \\ \\__/ / ", "  \\____/  "],
+            ["   ____   ", "  /    \\  ", " / /  \\ \\ ", " \\ \\__/ / ", "  \\____/  "],
         ],
         "sad": [
-            ["   ____   ", "  / - -\\  ", " / /  \\_\\ ", " \\ \\__/ / ", "  \\____/  "],
-            ["   ____   ", "  / T T\\  ", " / /  \\_\\ ", " \\ \\__/ / ", "  \\____/  "],
+            ["   ____   ", "  /    \\  ", " / /  \\ \\ ", " \\ \\__/ / ", "  \\____/  "],
+            ["   ____   ", "  /    \\  ", " / /  \\ \\ ", " \\ \\__/ / ", "  \\____/  "],
         ],
         "sleeping": [
-            ["   ____   ", "  / - -\\  ", " / /  \\_\\ ", " \\ \\__/ / ", "  \\____/  "],
-            ["   ____   ", "  / u u\\  ", " / /  \\_\\ ", " \\ \\__/ / ", "  \\____/  "],
+            ["   ____   ", "  /    \\  ", " / /  \\ \\ ", " \\ \\__/ / ", "  \\____/  "],
+            ["   ____   ", "  /    \\  ", " / /  \\ \\ ", " \\ \\__/ / ", "  \\____/  "],
         ],
         "eating": [
-            ["   ____   ", "  / ^o^\\  ", " / /  \\_\\ ", " \\ \\__/ / ", "  \\____/  "],
-            ["   ____   ", "  / ^-^\\  ", " / /  \\_\\ ", " \\ \\__/ / ", "  \\____/  "],
+            ["   ____   ", "  /    \\  ", " / /  \\ \\ ", " \\ \\__/ / ", "  \\____/  "],
+            ["   ____   ", "  /    \\  ", " / /  \\ \\ ", " \\ \\__/ / ", "  \\____/  "],
         ],
         "playing": [
-            ["   ____   ", "  / > <\\  ", " / /  \\_\\ ", " \\ \\__/ / ", "  \\____/  "],
-            ["   ____   ", "  / ^ ^\\  ", " / /  \\_\\ ", " \\ \\__/ / ", "  \\____/  "],
+            ["   ____   ", "  /    \\  ", " / /  \\ \\ ", " \\ \\__/ / ", "  \\____/  "],
+            ["   ____   ", "  /    \\  ", " / /  \\ \\ ", " \\ \\__/ / ", "  \\____/  "],
         ],
         "cleaning": [
-            ["   ____   ", "  / o o\\  ", " / /~~\\_\\ ", " \\ \\__/ / ", "  \\____/  "],
-            ["   ____   ", "  / ^ ^\\  ", " / /  \\_\\ ", " \\ \\__/ / ", "  \\____/  "],
+            ["   ____   ", "  /    \\  ", " / /  \\ \\ ", " \\ \\__/ / ", "  \\____/  "],
+            ["   ____   ", "  /    \\  ", " / /  \\ \\ ", " \\ \\__/ / ", "  \\____/  "],
         ],
     },
     STAGE_BABY: {
@@ -130,12 +130,12 @@ _CAT_SPRITES = {
     },
     STAGE_DEAD: {
         "dead": [
-            ["  x     x ", "    ___   ", "  /     \\", "  \\_____/ "],
-            ["  +     + ", "    ___   ", "  /     \\", "  \\_____/ "],
-        ],
-        "sleeping": [
-            ["  x     x ", "    ___   ", "  /     \\", "  \\_____/ "],
-            ["  +     + ", "    ___   ", "  /     \\", "  \\_____/ "],
+            [
+                "  /\\___/\\",
+                " (  X.X  )",
+                " /|     |\\",
+                " _|_____|_",
+            ],
         ],
     },
 }
@@ -171,6 +171,21 @@ def _frame_index(animation_time: datetime, frame_count: int, interval_ms: int) -
     return (timestamp_ms // interval_ms) % frame_count
 
 
+def _pick_sprite_frames(stage_sprites: dict[str, list[list[str]]], mood: str, *, is_asleep: bool) -> list[list[str]]:
+    if is_asleep:
+        preference_order = ("sleeping", mood, "neutral", "happy", "sad", "dead")
+    else:
+        preference_order = (mood, "neutral", "happy", "sad", "dead", "sleeping")
+    for pose_key in preference_order:
+        frames = stage_sprites.get(pose_key)
+        if frames:
+            return frames
+    for _pose_key, frames in stage_sprites.items():
+        if frames:
+            return frames
+    return [[""]]
+
+
 def get_sprite_lines(
     character: str,
     stage: str,
@@ -181,7 +196,9 @@ def get_sprite_lines(
     animation_time: datetime | None = None,
 ) -> list[str]:
     character_sprites = SPRITES.get(character, SPRITES[FALLBACK_CHARACTER])
-    stage_sprites = character_sprites[stage]
+    stage_sprites = character_sprites.get(stage)
+    if stage_sprites is None:
+        stage_sprites = character_sprites[STAGE_EGG]
     use_reaction = (
         reaction_pose is not None
         and reaction_pose in stage_sprites
@@ -190,11 +207,8 @@ def get_sprite_lines(
     if use_reaction:
         raw_frames = stage_sprites[reaction_pose]
         interval_ms = REACTION_FRAME_INTERVAL_MS
-    elif is_asleep:
-        raw_frames = stage_sprites.get("sleeping", stage_sprites.get(mood, stage_sprites["neutral"]))
-        interval_ms = FRAME_INTERVAL_MS
     else:
-        raw_frames = stage_sprites[mood]
+        raw_frames = _pick_sprite_frames(stage_sprites, mood, is_asleep=is_asleep)
         interval_ms = FRAME_INTERVAL_MS
     frames = _normalize_sprite_frames(raw_frames)
     if not frames:

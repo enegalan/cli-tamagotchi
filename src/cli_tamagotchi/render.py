@@ -10,6 +10,8 @@ from rich.table import Table
 from rich.text import Text
 
 from .characters import character_status_label
+from .engine import TICK_MINUTES
+from .illnesses import ILLNESS_DEFINITION_BY_ENUM, illness_from_value
 from .models import CHARACTER_STYLE_BY_NAME, STAGE_STYLE_BY_NAME, PetState
 from .sprites import get_sprite_lines
 
@@ -17,11 +19,13 @@ STAT_BAR_FILL_HIGH = {
     "hunger": "bright_yellow",
     "happiness": "bright_magenta",
     "health": "bright_green",
+    "energy": "bright_cyan",
 }
 STAT_BAR_FILL_MID = {
     "hunger": "yellow",
     "happiness": "magenta",
     "health": "green",
+    "energy": "cyan",
 }
 ACTION_EMOJI = {
     "feed": "🍔",
@@ -29,8 +33,9 @@ ACTION_EMOJI = {
     "lights_off": "🌙",
     "lights_on": "💡",
     "clean": "🧼",
-    "status": "📊",
+    "medicine": "💊",
     "quit": "🚪",
+    "new_pet": "🥚",
 }
 EVENT_EMOJI = {
     "hatched": "🥚",
@@ -41,6 +46,25 @@ EVENT_EMOJI = {
     "lights on": "💡",
     "clean": "🧼",
 }
+
+
+def _illness_summary_columns(pet_state: PetState) -> tuple[str, str]:
+    if not pet_state.active_illnesses:
+        return "None", ""
+    illness_parts: list[str] = list()
+    tick_hints: list[str] = list()
+    for entry in pet_state.active_illnesses:
+        ill = illness_from_value(entry.illness_id)
+        if ill is None:
+            continue
+        illness_parts.append(ILLNESS_DEFINITION_BY_ENUM[ill].display_name)
+        if entry.ticks_remaining is not None:
+            tick_hints.append(f"~{entry.ticks_remaining * TICK_MINUTES}m")
+    illness_display = ", ".join(illness_parts) if illness_parts else "None"
+    if not tick_hints:
+        return illness_display, ""
+    return illness_display, ", ".join(tick_hints)
+
 
 def render_status(
     pet_state: PetState,
@@ -62,7 +86,7 @@ def render_status(
     sprite_indent = min(len(line) - len(line.lstrip(" ")) for line in raw_sprite_lines if line.strip())
     sprite_lines = [line[sprite_indent:] for line in raw_sprite_lines]
     sprite_width = max(len(line) for line in sprite_lines)
-    stats_row_count = 8
+    stats_row_count = 10
     status_panel_height = max(len(sprite_lines), stats_row_count) + 2
     sprite_inner_height = status_panel_height - 2
     sprite_vertical_gap = max(0, sprite_inner_height - len(sprite_lines))
@@ -113,6 +137,13 @@ def render_status(
         Text(f"{pet_state.dirtiness}/3", style="white"),
         Text(""),
     )
+    illness_display, illness_hint = _illness_summary_columns(pet_state)
+    illness_style = "yellow" if pet_state.active_illnesses else "dim"
+    stats_table.add_row(
+        Text("Illness", style="bold"),
+        Text(illness_display, style=illness_style),
+        Text(illness_hint, style="dim"),
+    )
     stats_table.add_row(
         Text("Hunger", style="bold"),
         stat_bar("hunger", pet_state.hunger),
@@ -127,6 +158,11 @@ def render_status(
         Text("Health", style="bold"),
         stat_bar("health", pet_state.health),
         stat_value("health", pet_state.health),
+    )
+    stats_table.add_row(
+        Text("Energy", style="bold"),
+        stat_bar("energy", pet_state.energy),
+        stat_value("energy", pet_state.energy),
     )
 
     stats_panel = Panel(
@@ -149,7 +185,7 @@ def render_status(
         return Group(*sections)
 
     visible_events = _visible_events(pet_state, event_offset, event_limit)
-    events_table = Table.grid(expand=True)
+    events_table = Table.grid(expand=True, padding=(0, 1))
     events_table.add_column(style="dim", width=16)
     events_table.add_column(ratio=1)
     if visible_events:
@@ -180,10 +216,12 @@ def render_interactive_view(
     event_offset: int = 0,
     status_message: Text | None = None,
     animation_time: datetime | None = None,
+    *,
+    action_rows: tuple[tuple[str | None, str | None], ...] | None = None,
 ):
     sections = [
         render_status(pet_state, event_offset=event_offset, animation_time=animation_time),
-        render_actions(pet_state, selected_action),
+        render_actions(pet_state, selected_action, action_rows=action_rows),
     ]
     if status_message is not None:
         sections.append(
@@ -212,13 +250,21 @@ def stat_value(stat_name: str, value: int) -> Text:
     return Text(f"{value:>3}/100", style=fill_style)
 
 
-def render_actions(pet_state: PetState, selected_action: str) -> Panel:
+def render_actions(
+    pet_state: PetState,
+    selected_action: str,
+    *,
+    action_rows: tuple[tuple[str | None, str | None], ...] | None = None,
+) -> Panel:
+    rows = action_rows if action_rows is not None else _default_alive_action_rows(pet_state)
     actions_table = Table.grid(expand=True)
     actions_table.add_column(ratio=1)
     actions_table.add_column(ratio=1)
-    actions_table.add_row(_action_label("feed", selected_action), _action_label("play", selected_action))
-    actions_table.add_row(_action_label(_lights_action_name(pet_state), selected_action), _action_label("clean", selected_action))
-    actions_table.add_row(_action_label("status", selected_action), _action_label("quit", selected_action))
+    for left, right in rows:
+        actions_table.add_row(
+            _action_label(left, selected_action),
+            _action_label(right, selected_action),
+        )
     return Panel(
         actions_table,
         title="Actions",
@@ -226,6 +272,14 @@ def render_actions(pet_state: PetState, selected_action: str) -> Panel:
         border_style="dim",
         box=box.ROUNDED,
         padding=(0, 1),
+    )
+
+
+def _default_alive_action_rows(pet_state: PetState) -> tuple[tuple[str | None, str | None], ...]:
+    return (
+        ("feed", "play"),
+        (_lights_action_name(pet_state), "clean"),
+        ("medicine", "quit"),
     )
 
 
@@ -240,7 +294,7 @@ def _mood_style(mood: str) -> str:
 
 
 def _stat_bar_fill_style(stat_name: str, value: int) -> str:
-    if stat_name in ("hunger", "happiness", "health"):
+    if stat_name in ("hunger", "happiness", "health", "energy"):
         if value < 10:
             return "red"
         if value < 50:
@@ -253,10 +307,13 @@ def _stat_bar_fill_style(stat_name: str, value: int) -> str:
     return STAT_BAR_FILL_MID.get(stat_name, "yellow")
 
 
-def _action_label(action_name: str, selected_action: str) -> Text:
+def _action_label(action_name: str | None, selected_action: str) -> Text:
+    if not action_name:
+        return Text("")
     action_display_name = _action_display_name(action_name)
     action_text = f" {ACTION_EMOJI.get(action_name, '•')} {action_display_name} "
-    if action_name == selected_action or (selected_action == "lights" and action_name in ("lights_on", "lights_off")):
+    lights_match = selected_action == "lights" and action_name in ("lights_on", "lights_off")
+    if action_name == selected_action or lights_match:
         return Text(action_text, style="bold white on green")
     return Text(action_text, style="bold white")
 
@@ -300,6 +357,14 @@ def _event_emoji(message: str) -> str:
             return emoji
     if "passed away" in normalized_message:
         return "🪦"
+    if "fell ill" in normalized_message:
+        return "🤒"
+    if "underweight" in normalized_message or "overweight" in normalized_message:
+        return "⚖️"
+    if "medicine" in normalized_message:
+        return "💊"
+    if "recovered" in normalized_message:
+        return "✅"
     return "📌"
 
 
@@ -311,6 +376,10 @@ def _event_style(message: str) -> str:
         return "yellow"
     if "grew into" in normalized_message:
         return "bold magenta"
+    if "fell ill" in normalized_message or "medicine" in normalized_message:
+        return "yellow"
+    if "recovered" in normalized_message:
+        return "green"
     return "white"
 
 
@@ -321,10 +390,11 @@ def _action_display_name(action_name: str) -> str:
         "lights_off": "Lights Off",
         "lights_on": "Lights On",
         "clean": "Clean",
-        "status": "Status",
+        "medicine": "Medicine",
         "quit": "Quit",
+        "new_pet": "New pet",
     }
-    return display_names.get(action_name, action_name.title())
+    return display_names.get(action_name, action_name.replace("_", " ").title())
 
 
 def _lights_action_name(pet_state: PetState) -> str:

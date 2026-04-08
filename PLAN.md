@@ -21,18 +21,18 @@
 - [X] Sleep mechanics: lights on/off, affect stats
 - [X] Attention needs: calls for interaction
 - [X] Poop management and cleanliness
-- [ ] Sickness events and recovery
+- [X] Sickness events and recovery
 - [X] Auto-save pet state to `~/.cli-tamagotchi/`
 
 ### Terminal UI
 
-- [ ] Animated ASCII sprites for each character and mood
+- [X] Animated ASCII sprites for each character and mood
 - [X] Color-coded stat bars for each stat
 - [X] Action menu with up to 8 actions (Feed, Play, Lights On/Off, Clean, Status, etc.)
 - [X] Event log with real-time updates
 - [ ] Screens:
-  - [ ] New Pet
-  - [ ] Help
+  - [X] New Pet
+  - [X] Help
   - [ ] Graveyard
 
 ### Plugin System
