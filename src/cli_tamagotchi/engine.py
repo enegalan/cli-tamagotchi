@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from random import Random
 
+from .characters import roll_starting_character
 from .models import (
-    DEFAULT_CHARACTER,
     PetState,
     STAGE_ADULT,
     STAGE_BABY,
@@ -40,10 +41,10 @@ def stage_for_age(age: timedelta, is_alive: bool) -> str:
     return STAGE_ADULT
 
 
-def create_new_pet(now: datetime, name: str) -> PetState:
+def create_new_pet(now: datetime, name: str, rng: Random | None = None) -> PetState:
     pet_state = PetState(
         name=name,
-        character=DEFAULT_CHARACTER,
+        character=roll_starting_character(rng),
         stage=STAGE_EGG,
         weight=5,
         hunger=80,

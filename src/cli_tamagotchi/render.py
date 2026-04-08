@@ -7,6 +7,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from .characters import character_status_label
 from .models import CHARACTER_STYLE_BY_NAME, STAGE_STYLE_BY_NAME, PetState
 from .sprites import get_sprite_lines
 
@@ -75,7 +76,10 @@ def render_status(
     stats_table.add_column(justify="right", no_wrap=True)
     stats_table.add_row(
         Text("Character", style="bold"),
-        Text(pet_state.character, style=CHARACTER_STYLE_BY_NAME.get(pet_state.character, "white")),
+        Text(
+            character_status_label(pet_state.character),
+            style=CHARACTER_STYLE_BY_NAME.get(pet_state.character, "white"),
+        ),
         Text(""),
     )
     stats_table.add_row(

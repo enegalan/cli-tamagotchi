@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import random
 import sys
 import tempfile
 import unittest
@@ -22,6 +23,7 @@ from cli_tamagotchi.cli import (
     _read_single_key,
     main,
 )
+from cli_tamagotchi.characters import roll_starting_character
 from cli_tamagotchi.engine import TICK_MINUTES, apply_action, create_new_pet, reconcile_state
 from cli_tamagotchi.models import STAGE_BABY
 from cli_tamagotchi.render import render_status
@@ -38,7 +40,8 @@ class CliTamagotchiTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
 
-    def test_status_command_creates_and_persists_pet(self) -> None:
+    @patch("cli_tamagotchi.engine.roll_starting_character", return_value="Cat")
+    def test_status_command_creates_and_persists_pet(self, _mock_roll: object) -> None:
         stdout = io.StringIO()
 
         exit_code = main(
@@ -55,7 +58,7 @@ class CliTamagotchiTests(unittest.TestCase):
         self.assertIsNotNone(persisted_pet)
         assert persisted_pet is not None
         self.assertEqual(persisted_pet.name, "Nova")
-        self.assertEqual(persisted_pet.character, "Classic")
+        self.assertEqual(persisted_pet.character, "Cat")
         self.assertEqual(persisted_pet.weight, 5)
         self.assertIn("Nova", stdout.getvalue())
         self.assertIn("Stage", stdout.getvalue())
@@ -168,10 +171,14 @@ class CliTamagotchiTests(unittest.TestCase):
         self.assertEqual(getattr(rendered_status, "renderables")[1].subtitle, "3-6 of 9 | PgUp/PgDn scroll")
 
     def test_get_sprite_lines_returns_sleeping_variant_when_asleep(self) -> None:
-        sleeping_lines = get_sprite_lines("Classic", "Baby", "happy", is_asleep=True)
-        awake_lines = get_sprite_lines("Classic", "Baby", "happy", is_asleep=False)
+        sleeping_lines = get_sprite_lines("Cat", "Baby", "happy", is_asleep=True)
+        awake_lines = get_sprite_lines("Cat", "Baby", "happy", is_asleep=False)
 
         self.assertNotEqual(sleeping_lines, awake_lines)
+
+    def test_roll_starting_character_deterministic_by_seed(self) -> None:
+        self.assertEqual(roll_starting_character(random.Random(42)), "Cat")
+        self.assertEqual(roll_starting_character(random.Random(0)), "Fox")
 
     def test_read_single_key_esc_is_ignored_when_no_follow_up_sequence(self) -> None:
         keyboard_input = io.StringIO()

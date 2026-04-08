@@ -4,11 +4,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from .characters import CHARACTER_STYLE_BY_NAME, FALLBACK_CHARACTER
+
 MAX_LOG_EVENTS = 50
-DEFAULT_CHARACTER = "Classic"
-CHARACTER_STYLE_BY_NAME = {
-    "Classic": "bright_cyan",
-}
 STAGE_EGG = "Egg"
 STAGE_BABY = "Baby"
 STAGE_CHILD = "Child"
@@ -118,7 +116,7 @@ class PetState:
     def from_dict(cls, payload: dict[str, Any]) -> "PetState":
         return cls(
             name=payload["name"],
-            character=payload.get("character", DEFAULT_CHARACTER),
+            character=payload.get("character", FALLBACK_CHARACTER),
             stage=payload["stage"],
             weight=max(0, int(payload.get("weight", 5))),
             hunger=clamp_stat(payload["hunger"]),
