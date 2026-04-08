@@ -13,7 +13,7 @@ from .characters import character_status_label
 from .engine import TICK_MINUTES
 from .graveyard import GraveyardEntry
 from .illnesses import ILLNESS_DEFINITION_BY_ENUM, illness_from_value
-from .models import CHARACTER_STYLE_BY_NAME, STAGE_EGG, STAGE_STYLE_BY_NAME, PetState
+from .models import CHARACTER_STYLE_BY_NAME, STAGE_DEAD, STAGE_EGG, STAGE_STYLE_BY_NAME, PetState
 from .sprites import get_sprite_lines
 
 STAT_BAR_FILL_HIGH = {
@@ -84,6 +84,7 @@ def render_status(
         pet_state.is_asleep,
         reaction_pose=reaction_pose,
         animation_time=animation_time,
+        death_morph_stage=pet_state.death_morph_stage if pet_state.stage == STAGE_DEAD else None,
     )
     sprite_indent = min(len(line) - len(line.lstrip(" ")) for line in raw_sprite_lines if line.strip())
     sprite_lines = [line[sprite_indent:] for line in raw_sprite_lines]

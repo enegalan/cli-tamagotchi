@@ -22,6 +22,16 @@ STAGE_STYLE_BY_NAME = {
     STAGE_DEAD: "bright_black",
 }
 
+LIVE_STAGES_FOR_DEATH_SPRITE = frozenset((STAGE_BABY, STAGE_CHILD, STAGE_ADULT))
+
+
+def death_morph_for_live_stage(live_stage: str) -> str:
+    if live_stage in (STAGE_EGG, STAGE_BABY):
+        return STAGE_BABY
+    if live_stage == STAGE_CHILD:
+        return STAGE_CHILD
+    return STAGE_ADULT
+
 
 def clamp_stat(value: int) -> int:
     return max(0, min(100, value))
@@ -91,6 +101,7 @@ class PetState:
     active_illnesses: list[ActiveIllness] = field(default_factory=list)
     last_medicine_at: datetime | None = None
     graveyard_needs_entry: bool = False
+    death_morph_stage: str | None = None
 
     def add_event(self, message: str, now: datetime) -> None:
         self.events.append(EventEntry(timestamp=now, message=message))
@@ -165,6 +176,7 @@ class PetState:
             "events": [event.to_dict() for event in self.events],
             "active_illnesses": [entry.to_dict() for entry in self.active_illnesses],
             "last_medicine_at": self.last_medicine_at.isoformat() if self.last_medicine_at else None,
+            "death_morph_stage": self.death_morph_stage,
         }
 
     @classmethod
@@ -174,6 +186,13 @@ class PetState:
 
         active_illnesses = [ActiveIllness.from_dict(item) for item in payload["active_illnesses"]]
         active_illnesses = _sanitize_active_illnesses(active_illnesses)
+
+        raw_death_morph = payload.get("death_morph_stage")
+        death_morph_stage: str | None
+        if raw_death_morph in LIVE_STAGES_FOR_DEATH_SPRITE:
+            death_morph_stage = str(raw_death_morph)
+        else:
+            death_morph_stage = None
 
         return cls(
             name=payload["name"],
@@ -197,6 +216,7 @@ class PetState:
             active_illnesses=active_illnesses,
             last_medicine_at=last_medicine_at,
             graveyard_needs_entry=False,
+            death_morph_stage=death_morph_stage,
         )
 
 

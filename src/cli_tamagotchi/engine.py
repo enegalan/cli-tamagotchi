@@ -24,6 +24,7 @@ from .models import (
     STAGE_DEAD,
     STAGE_EGG,
     clamp_stat,
+    death_morph_for_live_stage,
 )
 
 TICK_MINUTES = 0.25
@@ -314,6 +315,7 @@ def _apply_tick(pet_state: PetState, tick_time: datetime, rng: Random | None = N
 
     if pet_state.health == 0:
         pet_state.active_illnesses = list()
+        pet_state.death_morph_stage = death_morph_for_live_stage(pet_state.stage)
         pet_state.is_alive = False
         pet_state.stage = STAGE_DEAD
         pet_state.stage_started_at = tick_time

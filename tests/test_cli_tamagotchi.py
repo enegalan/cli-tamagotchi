@@ -8,7 +8,7 @@ import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
 from random import Random
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from rich.console import Console
 
@@ -29,10 +29,18 @@ from cli_tamagotchi.cli import (
     _read_single_key,
     main,
 )
-from cli_tamagotchi.characters import roll_starting_character
+from cli_tamagotchi.characters import CHARACTER_POOL, roll_starting_character
 from cli_tamagotchi.engine import TICK_MINUTES, apply_action, create_new_pet, reconcile_state
 from cli_tamagotchi.illnesses import Illness
-from cli_tamagotchi.models import ActiveIllness, REACTION_ANIMATION_WINDOW, STAGE_BABY, STAGE_DEAD
+from cli_tamagotchi.models import (
+    ActiveIllness,
+    PetState,
+    REACTION_ANIMATION_WINDOW,
+    STAGE_ADULT,
+    STAGE_BABY,
+    STAGE_CHILD,
+    STAGE_DEAD,
+)
 from cli_tamagotchi.render import render_event_log, render_status
 from cli_tamagotchi.sprites import FRAME_INTERVAL_MS, get_sprite_lines
 from cli_tamagotchi.graveyard import GraveyardEntry, write_graveyard
@@ -637,9 +645,68 @@ class CliTamagotchiTests(unittest.TestCase):
         )
         self.assertNotEqual(idle, eating)
 
-    def test_roll_starting_character_deterministic_by_seed(self) -> None:
-        self.assertEqual(roll_starting_character(random.Random(42)), "Cat")
-        self.assertEqual(roll_starting_character(random.Random(0)), "Fox")
+    def test_roll_starting_character_covers_full_pool(self) -> None:
+        pool_ids = {spec.character_id for spec in CHARACTER_POOL}
+        rng = random.Random(999)
+        seen: set[str] = set()
+        for _ in range(2500):
+            seen.add(roll_starting_character(rng))
+            if seen == pool_ids:
+                break
+        self.assertEqual(
+            seen,
+            pool_ids,
+            msg=f"Expected every pool character to appear; missing {pool_ids - seen}",
+        )
+
+    def test_roll_starting_character_passes_pool_ids_and_weights_to_choices(self) -> None:
+        expected_ids = [spec.character_id for spec in CHARACTER_POOL]
+        expected_weights = [spec.roll_weight for spec in CHARACTER_POOL]
+        mock_rng = MagicMock(spec=Random)
+        mock_rng.choices.return_value = [expected_ids[0]]
+        self.assertEqual(roll_starting_character(mock_rng), expected_ids[0])
+        mock_rng.choices.assert_called_once_with(expected_ids, weights=expected_weights, k=1)
+
+    def test_fox_baby_sprite_differs_from_cat(self) -> None:
+        now = datetime(2020, 1, 1, 12, 0, 0)
+        cat_lines = get_sprite_lines("Cat", STAGE_BABY, "happy", is_asleep=False, animation_time=now)
+        fox_lines = get_sprite_lines("Fox", STAGE_BABY, "happy", is_asleep=False, animation_time=now)
+        self.assertNotEqual(cat_lines, fox_lines)
+
+    def test_dead_sprite_depends_on_death_morph_stage(self) -> None:
+        now = datetime(2020, 1, 1, 12, 0, 0)
+        baby = get_sprite_lines(
+            "Cat",
+            STAGE_DEAD,
+            "dead",
+            animation_time=now,
+            death_morph_stage=STAGE_BABY,
+        )
+        child = get_sprite_lines(
+            "Cat",
+            STAGE_DEAD,
+            "dead",
+            animation_time=now,
+            death_morph_stage=STAGE_CHILD,
+        )
+        adult = get_sprite_lines(
+            "Cat",
+            STAGE_DEAD,
+            "dead",
+            animation_time=now,
+            death_morph_stage=STAGE_ADULT,
+        )
+        self.assertNotEqual(baby, child)
+        self.assertNotEqual(baby, adult)
+        self.assertNotEqual(child, adult)
+
+    def test_pet_state_roundtrip_death_morph_stage(self) -> None:
+        pet_state = create_new_pet(self.base_time, name="M")
+        pet_state.stage = STAGE_DEAD
+        pet_state.death_morph_stage = STAGE_CHILD
+        pet_state.is_alive = False
+        restored = PetState.from_dict(pet_state.to_dict())
+        self.assertEqual(restored.death_morph_stage, STAGE_CHILD)
 
     def test_read_single_key_esc_is_ignored_when_no_follow_up_sequence(self) -> None:
         keyboard_input = io.StringIO()

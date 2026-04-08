@@ -38,18 +38,34 @@ CHARACTER_POOL: tuple[CharacterSpec, ...] = (
     CharacterSpec(
         character_id="Cat",
         rarity=Rarity.COMMON,
-        roll_weight=80,
+        roll_weight=48,
         rich_style="bright_cyan",
         healthy_weight_min=3,
         healthy_weight_max=26,
     ),
     CharacterSpec(
+        character_id="Dog",
+        rarity=Rarity.UNCOMMON,
+        roll_weight=25,
+        rich_style="bright_yellow",
+        healthy_weight_min=3,
+        healthy_weight_max=24,
+    ),
+    CharacterSpec(
         character_id="Fox",
         rarity=Rarity.RARE,
-        roll_weight=20,
+        roll_weight=17,
         rich_style="bright_magenta",
         healthy_weight_min=2,
         healthy_weight_max=20,
+    ),
+    CharacterSpec(
+        character_id="Owl",
+        rarity=Rarity.EPIC,
+        roll_weight=10,
+        rich_style="bright_blue",
+        healthy_weight_min=2,
+        healthy_weight_max=18,
     ),
 )
 
