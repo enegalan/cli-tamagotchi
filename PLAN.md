@@ -33,7 +33,7 @@
 - [ ] Screens:
   - [X] New Pet
   - [X] Help
-  - [ ] Graveyard
+  - [X] Graveyard
 
 ### Plugin System
 
@@ -46,23 +46,19 @@
 
 - [X] `tama` — Launch full TUI
 - [X] `tama status` — Show pet stats quickly
+- [X] `tama feed` — Feed pet
 - [X] `tama play` — Play mini-game
+- [X] `tama lights` — Toggle the lights on or off.
 - [X] `tama clean` — Clean pet
-- [ ] `tama sleep` / `tama wake` — Toggle sleep
+- [X] `tama medicine` — Give medicine
+- [X] `tama new` — Start a new pet
 - [ ] `tama logs` — Show event log
-- [ ] `tama graveyard` — View deceased pets
-- [ ] `tama pets` — View alive pets
-- [ ] `tama switch <pet_id>` — Switch between multiple pets
+- [X] `tama graveyard` — View deceased pets
 
 ### Mini-Games
 
 - [ ] Implement Play action mini-game (reaction/guess game)
 - [ ] Track mini-game score to affect Happiness stat
-
-### Multi-Pet Support
-
-- [ ] Multiple pet slots
-- [ ] Switch between pets easily via CLI
 
 ### Packaging
 

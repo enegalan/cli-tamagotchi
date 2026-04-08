@@ -11,8 +11,9 @@ from rich.text import Text
 
 from .characters import character_status_label
 from .engine import TICK_MINUTES
+from .graveyard import GraveyardEntry
 from .illnesses import ILLNESS_DEFINITION_BY_ENUM, illness_from_value
-from .models import CHARACTER_STYLE_BY_NAME, STAGE_STYLE_BY_NAME, PetState
+from .models import CHARACTER_STYLE_BY_NAME, STAGE_EGG, STAGE_STYLE_BY_NAME, PetState
 from .sprites import get_sprite_lines
 
 STAT_BAR_FILL_HIGH = {
@@ -36,6 +37,7 @@ ACTION_EMOJI = {
     "medicine": "💊",
     "quit": "🚪",
     "new_pet": "🥚",
+    "graveyard": "🪦",
 }
 EVENT_EMOJI = {
     "hatched": "🥚",
@@ -235,6 +237,124 @@ def render_interactive_view(
     return Group(*sections)
 
 
+NAME_HATCH_MAX_CHARS = 32
+
+
+def render_name_hatch_prompt(name_buffer: str, *, max_chars: int = NAME_HATCH_MAX_CHARS) -> Panel:
+    clipped = name_buffer[:max_chars]
+    body = Text()
+    body.append("Name: ", style="bold cyan")
+    body.append(clipped, style="white")
+    body.append("▎", style="bold green")
+    body.append("\n")
+    body.append("Enter — confirm (empty = random)  ·  Esc — cancel", style="dim")
+    return Panel(
+        body,
+        title=Text("Name your pet", style="bold magenta"),
+        border_style="cyan",
+        box=box.ROUNDED,
+        padding=(0, 1),
+    )
+
+
+def render_placeholder_hatch(animation_time: datetime | None) -> Panel:
+    raw_sprite_lines = get_sprite_lines(
+        "Cat",
+        STAGE_EGG,
+        "happy",
+        is_asleep=False,
+        animation_time=animation_time,
+    )
+    sprite_indent = min(len(line) - len(line.lstrip(" ")) for line in raw_sprite_lines if line.strip())
+    sprite_lines = [line[sprite_indent:] for line in raw_sprite_lines]
+    sprite_width = max(len(line) for line in sprite_lines)
+    inner_height = max(len(sprite_lines), 6) + 2
+    vertical_gap = max(0, inner_height - 2 - len(sprite_lines))
+    top_pad = vertical_gap // 2
+    bottom_pad = vertical_gap - top_pad
+    centered = ([""] * top_pad) + sprite_lines + ([""] * bottom_pad)
+    return Panel(
+        Align.center(Text("\n".join(centered))),
+        title=Text("Welcome", style="magenta"),
+        border_style="green",
+        height=inner_height,
+        width=min(sprite_width + 8, 80),
+        box=box.ROUNDED,
+        padding=(0, 1),
+    )
+
+
+def render_name_hatch_view(
+    name_buffer: str,
+    backdrop_pet: PetState | None,
+    event_offset: int,
+    animation_time: datetime | None,
+) -> Group:
+    if backdrop_pet is not None:
+        top = render_status(backdrop_pet, event_offset=event_offset, animation_time=animation_time)
+    else:
+        top = render_placeholder_hatch(animation_time)
+    return Group(top, render_name_hatch_prompt(name_buffer))
+
+
+GRAVEYARD_PAGE_SIZE = 10
+
+
+def render_graveyard_view(
+    entries: list[GraveyardEntry],
+    scroll_offset: int = 0,
+    *,
+    page_size: int = GRAVEYARD_PAGE_SIZE,
+):
+    total = len(entries)
+    safe_offset = 0
+    if total > 0:
+        max_offset = max(0, total - page_size)
+        safe_offset = max(0, min(scroll_offset, max_offset))
+
+    if total == 0:
+        inner: Table | Text = Text("No pets rest here yet.", style="dim italic")
+    else:
+        window = entries[safe_offset : safe_offset + page_size]
+        table = Table(
+            show_header=True,
+            header_style="bold cyan",
+            box=box.SIMPLE_HEAD,
+            padding=(0, 1),
+            expand=True,
+        )
+        table.add_column("Name", style="magenta", min_width=10, overflow="fold")
+        table.add_column("Character", min_width=8, overflow="fold")
+        table.add_column("Stage", min_width=6, overflow="fold")
+        table.add_column("Born", style="dim", min_width=10)
+        table.add_column("Died", style="dim", min_width=16)
+        for entry in window:
+            char_style = CHARACTER_STYLE_BY_NAME.get(entry.character, "white")
+            table.add_row(
+                entry.name,
+                Text(character_status_label(entry.character), style=char_style),
+                Text(entry.stage, style=STAGE_STYLE_BY_NAME.get(entry.stage, "white")),
+                entry.created_at.strftime("%Y-%m-%d"),
+                entry.died_at.strftime("%Y-%m-%d %H:%M"),
+            )
+        inner = table
+
+    if total > page_size:
+        end_index = min(total, safe_offset + page_size)
+        subtitle = f"{safe_offset + 1}-{end_index} of {total} | ↑ ↓ scroll | q Enter back"
+    else:
+        subtitle = "q / Enter — back to pet"
+
+    return Panel(
+        inner,
+        title=Text("Graveyard", style="bold bright_black"),
+        subtitle=subtitle,
+        border_style="bright_black",
+        box=box.ROUNDED,
+        padding=(0, 1),
+    )
+
+
 def stat_bar(stat_name: str, value: int) -> Text:
     filled_units = max(0, min(10, round(value / 10)))
     empty_units = 10 - filled_units
@@ -393,6 +513,7 @@ def _action_display_name(action_name: str) -> str:
         "medicine": "Medicine",
         "quit": "Quit",
         "new_pet": "New pet",
+        "graveyard": "Graveyard",
     }
     return display_names.get(action_name, action_name.replace("_", " ").title())
 

@@ -8,13 +8,21 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional, Sequence, TextIO
 
-from rich.console import Console
+from rich.console import Console, Group
 from rich.live import Live
 from rich.text import Text
 
 from .engine import apply_action, create_new_pet, pick_random_pet_name, reconcile_state
 from .models import PetState
-from .render import _lights_action_name, render_interactive_view, render_status
+from .render import (
+    GRAVEYARD_PAGE_SIZE,
+    NAME_HATCH_MAX_CHARS,
+    _lights_action_name,
+    render_graveyard_view,
+    render_interactive_view,
+    render_name_hatch_view,
+    render_status,
+)
 from .storage import PetStorage
 
 try:
@@ -36,11 +44,15 @@ def build_action_grid(pet_state: PetState, storage: PetStorage) -> tuple[tuple[s
         return (
             ("feed", "play"),
             (_lights_action_name(pet_state), "clean"),
-            ("medicine", "quit"),
+            ("medicine", "graveyard"),
+            ("quit", None),
         )
     if storage.can_create_new_pet(pet_state):
-        return (("new_pet", "quit"),)
-    return (("quit", None),)
+        return (
+            ("new_pet", "graveyard"),
+            ("quit", None),
+        )
+    return (("graveyard", "quit"),)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -53,6 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("clean", help="Clean your pet's space.")
     subparsers.add_parser("medicine", help="Give medicine (cooldown 1h, cures illness, restores health).")
     subparsers.add_parser("new", help="Start a new pet (only if none is alive).")
+    subparsers.add_parser("graveyard", help="List pets that have passed away.")
     return parser
 
 
@@ -71,19 +84,13 @@ def main(
     storage = storage or PetStorage(base_dir=_storage_dir_from_env())
     console = Console(file=output, width=100)
 
-    pet_state = load_or_create_pet(
-        storage, now_provider(), output=output, input_stream=input_stream
-    )
-
-    if args.command == "new":
-        if pet_state.is_alive:
-            console.print("A pet is already alive. You can only have one living pet.", style="bold red")
-            return 1
-        new_name = prompt_pet_name_on_hatch(output, input_stream)
-        pet_state = create_new_pet(now=now_provider(), name=new_name)
+    pet_state = storage.load()
+    if pet_state is not None:
+        reconcile_state(pet_state, now_provider())
         storage.save(pet_state)
-        console.print(f"A new pet, {pet_state.name}, has hatched.", style="bold green")
-        console.print(render_status(pet_state, compact=True, animation_time=now_provider()))
+
+    if args.command == "graveyard":
+        console.print(render_graveyard_view(storage.load_graveyard()))
         return 0
 
     if not args.command:
@@ -95,6 +102,24 @@ def main(
             output=output,
             input_stream=input_stream,
         )
+
+    if args.command == "new":
+        if pet_state is not None and pet_state.is_alive:
+            console.print("A pet is already alive. You can only have one living pet.", style="bold red")
+            return 1
+        if pet_state is not None:
+            storage.save_dead_before_hatching_replacement(pet_state)
+        new_name = prompt_pet_name_on_hatch(output, input_stream)
+        pet_state = create_new_pet(now=now_provider(), name=new_name)
+        storage.save(pet_state)
+        console.print(f"A new pet, {pet_state.name}, has hatched.", style="bold green")
+        console.print(render_status(pet_state, compact=True, animation_time=now_provider()))
+        return 0
+
+    if pet_state is None:
+        bootstrap_name = prompt_pet_name_on_hatch(output, input_stream)
+        pet_state = create_new_pet(now=now_provider(), name=bootstrap_name)
+        storage.save(pet_state)
 
     if args.command == "status":
         storage.save(pet_state)
@@ -112,22 +137,69 @@ def prompt_pet_name_on_hatch(
     output: TextIO,
     input_stream: TextIO,
     *,
-    live: Optional[Live] = None,
+    prompt_prefix: Optional[str] = None,
 ) -> str:
-    if live is not None:
-        live.stop()
-    try:
-        return _prompt_pet_name_line(output, input_stream)
-    finally:
-        if live is not None:
-            live.start(refresh=True)
+    return _prompt_pet_name_line(output, input_stream, prompt_prefix=prompt_prefix)
 
 
-def _prompt_pet_name_line(output: TextIO, input_stream: TextIO) -> str:
+def _prompt_pet_name_in_tui(
+    live: Live,
+    input_stream: TextIO,
+    output: TextIO,
+    *,
+    backdrop_pet: Optional[PetState],
+    now_provider: Callable[[], datetime],
+) -> Optional[str]:
+    if not _supports_single_key_input(input_stream):
+        return _prompt_pet_name_line(output, input_stream, prompt_prefix="\n> ")
+
+    event_offset = (
+        _default_event_offset(backdrop_pet, EVENT_WINDOW_SIZE) if backdrop_pet is not None else 0
+    )
+    name_buffer = ""
+    while True:
+        current_time = now_provider()
+        live.update(
+            Group(
+                render_name_hatch_view(
+                    name_buffer,
+                    backdrop_pet,
+                    event_offset,
+                    current_time,
+                )
+            ),
+            refresh=True,
+        )
+        key = _read_single_key(input_stream, idle_timeout_seconds=None, for_name_prompt=True)
+        if key is None:
+            continue
+        if key == "name_cancel":
+            return None
+        if key == "select":
+            stripped = name_buffer.strip()
+            return stripped if stripped else pick_random_pet_name()
+        if key == "name_backspace":
+            name_buffer = name_buffer[:-1]
+            continue
+        if key and len(key) == 1 and key.isprintable():
+            if len(name_buffer) < NAME_HATCH_MAX_CHARS:
+                name_buffer += key
+            continue
+
+
+def _prompt_pet_name_line(
+    output: TextIO,
+    input_stream: TextIO,
+    *,
+    prompt_prefix: Optional[str] = None,
+) -> str:
     input_is_tty = bool(getattr(input_stream, "isatty", lambda: False)())
     if not input_is_tty:
         return pick_random_pet_name()
-    output.write("\nPet name (Enter for random): ")
+    line_prefix = (
+        "\nPet name (Enter for random): " if prompt_prefix is None else prompt_prefix
+    )
+    output.write(line_prefix)
     output.flush()
     line = input_stream.readline()
     if not line:
@@ -136,26 +208,8 @@ def _prompt_pet_name_line(output: TextIO, input_stream: TextIO) -> str:
     return stripped_line if stripped_line else pick_random_pet_name()
 
 
-def load_or_create_pet(
-    storage: PetStorage,
-    now: datetime,
-    *,
-    output: TextIO,
-    input_stream: TextIO,
-) -> PetState:
-    pet_state = storage.load()
-    if pet_state is None:
-        resolved_name = prompt_pet_name_on_hatch(output, input_stream)
-        pet_state = create_new_pet(now=now, name=resolved_name)
-    else:
-        reconcile_state(pet_state, now)
-
-    storage.save(pet_state)
-    return pet_state
-
-
 def run_interactive_loop(
-    pet_state: PetState,
+    pet_state: Optional[PetState],
     storage: PetStorage,
     now_provider: Callable[[], datetime],
     console: Console,
@@ -164,7 +218,8 @@ def run_interactive_loop(
 ) -> int:
     status_message: Optional[Text] = None
     selected_position = (0, 0)
-    event_offset = _default_event_offset(pet_state, EVENT_WINDOW_SIZE)
+    screen_mode = "pet"
+    graveyard_scroll = 0
     if not _supports_fullscreen(output, input_stream):
         return _run_interactive_loop_fallback(
             pet_state=pet_state,
@@ -175,23 +230,84 @@ def run_interactive_loop(
             input_stream=input_stream,
         )
 
+    working_pet: Optional[PetState] = pet_state
+    now_initial = now_provider()
+    if working_pet is None:
+        live_initial = Group(render_name_hatch_view("", None, 0, now_initial))
+    else:
+        initial_grid = build_action_grid(working_pet, storage)
+        selected_position = _clamp_selection(initial_grid, selected_position)
+        live_initial = render_interactive_view(
+            working_pet,
+            _highlight_key_at_position(initial_grid, selected_position),
+            event_offset=_default_event_offset(working_pet, EVENT_WINDOW_SIZE),
+            status_message=status_message,
+            animation_time=now_initial,
+            action_rows=initial_grid,
+        )
+
     with Live(
-        render_interactive_view(
-            pet_state,
-            _highlight_key_at_position(build_action_grid(pet_state, storage), selected_position),
-            event_offset=event_offset,
-            animation_time=now_provider(),
-            action_rows=build_action_grid(pet_state, storage),
-        ),
+        live_initial,
         console=console,
         screen=True,
         auto_refresh=False,
     ) as live:
+        if working_pet is None:
+            hatch_name = _prompt_pet_name_in_tui(
+                live,
+                input_stream,
+                output,
+                backdrop_pet=None,
+                now_provider=now_provider,
+            )
+            if hatch_name is None:
+                return 0
+            working_pet = create_new_pet(now_provider(), hatch_name)
+            storage.save(working_pet)
+            status_message = Text(
+                f"{working_pet.name} hatched! Welcome to cli-tamagotchi.",
+                style="bold green",
+            )
+
+        assert working_pet is not None
+        pet_state = working_pet
+        event_offset = _default_event_offset(pet_state, EVENT_WINDOW_SIZE)
+        action_grid = build_action_grid(pet_state, storage)
+        selected_position = _clamp_selection(action_grid, (0, 0))
+
         while True:
             current_time = now_provider()
             reconcile_state(pet_state, current_time)
             action_grid = build_action_grid(pet_state, storage)
             selected_position = _clamp_selection(action_grid, selected_position)
+
+            if screen_mode == "graveyard":
+                entries = storage.load_graveyard()
+                max_grave_scroll = max(0, len(entries) - GRAVEYARD_PAGE_SIZE)
+                graveyard_scroll = max(0, min(graveyard_scroll, max_grave_scroll))
+                live.update(Group(render_graveyard_view(entries, graveyard_scroll)), refresh=True)
+                raw_action = _read_action_input(
+                    output,
+                    input_stream,
+                    idle_timeout_seconds=INTERACTIVE_IDLE_TIMEOUT_SECONDS,
+                )
+                if raw_action is None:
+                    storage.save(pet_state)
+                    return 0
+                if raw_action == NO_ACTION:
+                    continue
+                if raw_action in ("up", "down"):
+                    if raw_action == "up":
+                        graveyard_scroll = max(0, graveyard_scroll - 1)
+                    else:
+                        graveyard_scroll = min(max_grave_scroll, graveyard_scroll + 1)
+                    continue
+                if raw_action in ("quit", "select"):
+                    screen_mode = "pet"
+                    status_message = None
+                    continue
+                continue
+
             live.update(
                 render_interactive_view(
                     pet_state,
@@ -253,6 +369,12 @@ def run_interactive_loop(
                 )
                 return 0
 
+            if command == "graveyard":
+                entries = storage.load_graveyard()
+                graveyard_scroll = max(0, len(entries) - GRAVEYARD_PAGE_SIZE)
+                screen_mode = "graveyard"
+                continue
+
             if command == "new_pet":
                 if pet_state.is_alive:
                     status_message = Text("You already have a living pet.", style="bold red")
@@ -260,7 +382,17 @@ def run_interactive_loop(
                 if not storage.can_create_new_pet(pet_state):
                     status_message = Text("Cannot start a new pet right now.", style="bold red")
                     continue
-                hatch_name = prompt_pet_name_on_hatch(output, input_stream, live=live)
+                hatch_name = _prompt_pet_name_in_tui(
+                    live,
+                    input_stream,
+                    output,
+                    backdrop_pet=pet_state,
+                    now_provider=now_provider,
+                )
+                if hatch_name is None:
+                    status_message = Text("Hatching cancelled.", style="yellow")
+                    continue
+                storage.save_dead_before_hatching_replacement(pet_state)
                 pet_state = create_new_pet(now_provider(), hatch_name)
                 storage.save(pet_state)
                 event_offset = _default_event_offset(pet_state, EVENT_WINDOW_SIZE)
@@ -289,7 +421,7 @@ def _supports_fullscreen(output: TextIO, input_stream: TextIO) -> bool:
 
 
 def _run_interactive_loop_fallback(
-    pet_state: PetState,
+    pet_state: Optional[PetState],
     storage: PetStorage,
     now_provider: Callable[[], datetime],
     console: Console,
@@ -298,12 +430,56 @@ def _run_interactive_loop_fallback(
 ) -> int:
     status_message: Optional[Text] = None
     selected_position = (0, 0)
+    screen_mode = "pet"
+    graveyard_scroll = 0
+    if pet_state is None:
+        console.print(render_name_hatch_view("", None, 0, now_provider()))
+        bootstrap_name = _prompt_pet_name_line(output, input_stream, prompt_prefix="\n> ")
+        pet_state = create_new_pet(now_provider(), bootstrap_name)
+        storage.save(pet_state)
+        status_message = Text(
+            f"{pet_state.name} hatched! Welcome to cli-tamagotchi.",
+            style="bold green",
+        )
+
+    assert pet_state is not None
     event_offset = _default_event_offset(pet_state, EVENT_WINDOW_SIZE)
 
     while True:
         reconcile_state(pet_state, now_provider())
         action_grid = build_action_grid(pet_state, storage)
         selected_position = _clamp_selection(action_grid, selected_position)
+
+        if screen_mode == "graveyard":
+            entries = storage.load_graveyard()
+            max_grave_scroll = max(0, len(entries) - GRAVEYARD_PAGE_SIZE)
+            graveyard_scroll = max(0, min(graveyard_scroll, max_grave_scroll))
+            console.print(render_graveyard_view(entries, graveyard_scroll))
+            raw_action = _read_action_input(output, input_stream)
+            if raw_action is None:
+                storage.save(pet_state)
+                return 0
+            if raw_action == NO_ACTION:
+                continue
+            normalized = _normalize_action_input(raw_action) if isinstance(raw_action, str) else None
+            if raw_action in ("up", "down"):
+                if raw_action == "up":
+                    graveyard_scroll = max(0, graveyard_scroll - 1)
+                else:
+                    graveyard_scroll = min(max_grave_scroll, graveyard_scroll + 1)
+                continue
+            if raw_action in ("quit", "select"):
+                screen_mode = "pet"
+                status_message = None
+                continue
+            if isinstance(raw_action, str):
+                line_lower = raw_action.strip().lower()
+                if line_lower in ("q", "quit", "back") or _normalize_action_input(raw_action) == "quit":
+                    screen_mode = "pet"
+                    status_message = None
+                    continue
+            continue
+
         console.print(
             render_interactive_view(
                 pet_state,
@@ -346,6 +522,12 @@ def _run_interactive_loop_fallback(
             console.print("Goodbye.", style="bold cyan")
             return 0
 
+        if command == "graveyard":
+            entries = storage.load_graveyard()
+            graveyard_scroll = max(0, len(entries) - GRAVEYARD_PAGE_SIZE)
+            screen_mode = "graveyard"
+            continue
+
         if command == "new_pet":
             if pet_state.is_alive:
                 status_message = Text("You already have a living pet.", style="bold red")
@@ -354,6 +536,7 @@ def _run_interactive_loop_fallback(
                 status_message = Text("Cannot start a new pet right now.", style="bold red")
                 continue
             hatch_name = prompt_pet_name_on_hatch(output, input_stream)
+            storage.save_dead_before_hatching_replacement(pet_state)
             pet_state = create_new_pet(now_provider(), hatch_name)
             storage.save(pet_state)
             event_offset = _default_event_offset(pet_state, EVENT_WINDOW_SIZE)
@@ -401,6 +584,8 @@ def _read_action_input(
 def _read_single_key(
     input_stream: TextIO,
     idle_timeout_seconds: Optional[float] = None,
+    *,
+    for_name_prompt: bool = False,
 ) -> Optional[str]:
     file_descriptor = input_stream.fileno()
     previous_settings = termios.tcgetattr(file_descriptor)
@@ -414,13 +599,20 @@ def _read_single_key(
         if not pressed_key:
             return None
 
-        if pressed_key in ("\x03", "\x04"):
+        if for_name_prompt:
+            if pressed_key == "\x03":
+                raise KeyboardInterrupt
+            if pressed_key == "\x04":
+                return "select"
+            if pressed_key in ("\x7f", "\x08"):
+                return "name_backspace"
+        elif pressed_key in ("\x03", "\x04"):
             return "quit"
 
         if pressed_key == "\x1b":
             next_character = _read_key_if_available(file_descriptor, 0.15)
             if not next_character:
-                return None
+                return "name_cancel" if for_name_prompt else None
             if next_character not in ("[", "O"):
                 return None
             arrow_key = _read_key_if_available(file_descriptor, 0.15)
@@ -453,7 +645,7 @@ def _read_single_key(
         if pressed_key in ("\r", "\n"):
             return "select"
 
-        if pressed_key.lower() == "q":
+        if pressed_key.lower() == "q" and not for_name_prompt:
             return "quit"
 
         return pressed_key
@@ -494,6 +686,9 @@ def _normalize_action_input(raw_command: str) -> Optional[str]:
 
     if normalized_command in ("new_pet", "new pet", "new"):
         return "new_pet"
+
+    if normalized_command in ("graveyard", "cemetery"):
+        return "graveyard"
 
     return None
 

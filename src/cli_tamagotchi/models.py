@@ -90,6 +90,7 @@ class PetState:
     events: list[EventEntry] = field(default_factory=list)
     active_illnesses: list[ActiveIllness] = field(default_factory=list)
     last_medicine_at: datetime | None = None
+    graveyard_needs_entry: bool = False
 
     def add_event(self, message: str, now: datetime) -> None:
         self.events.append(EventEntry(timestamp=now, message=message))
@@ -195,6 +196,7 @@ class PetState:
             events=[EventEntry.from_dict(event) for event in payload.get("events", list())],
             active_illnesses=active_illnesses,
             last_medicine_at=last_medicine_at,
+            graveyard_needs_entry=False,
         )
 
 

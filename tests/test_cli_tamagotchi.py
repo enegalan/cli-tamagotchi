@@ -33,6 +33,7 @@ from cli_tamagotchi.illnesses import Illness
 from cli_tamagotchi.models import ActiveIllness, REACTION_ANIMATION_WINDOW, STAGE_BABY, STAGE_DEAD
 from cli_tamagotchi.render import render_status
 from cli_tamagotchi.sprites import FRAME_INTERVAL_MS, get_sprite_lines
+from cli_tamagotchi.graveyard import GraveyardEntry, write_graveyard
 from cli_tamagotchi.storage import PetStorage
 
 
@@ -366,6 +367,8 @@ class CliTamagotchiTests(unittest.TestCase):
         self.assertEqual(_normalize_action_input("quit"), "quit")
         self.assertEqual(_normalize_action_input("new"), "new_pet")
         self.assertEqual(_normalize_action_input("new pet"), "new_pet")
+        self.assertEqual(_normalize_action_input("graveyard"), "graveyard")
+        self.assertEqual(_normalize_action_input("cemetery"), "graveyard")
         self.assertEqual(_normalize_action_input("pgup"), "events_up")
         self.assertEqual(_normalize_action_input("pagedown"), "events_down")
         self.assertIsNone(_normalize_action_input(""))
@@ -375,14 +378,16 @@ class CliTamagotchiTests(unittest.TestCase):
         alive_grid = (
             ("feed", "play"),
             ("lights_off", "clean"),
-            ("medicine", "quit"),
+            ("medicine", "graveyard"),
+            ("quit", None),
         )
         self.assertEqual(_move_selection(alive_grid, (0, 0), "right"), (0, 1))
         self.assertEqual(_move_selection(alive_grid, (0, 1), "down"), (1, 1))
         self.assertEqual(_move_selection(alive_grid, (1, 1), "down"), (2, 1))
-        self.assertEqual(_move_selection(alive_grid, (2, 1), "left"), (2, 0))
-        self.assertEqual(_move_selection(alive_grid, (2, 0), "up"), (1, 0))
-        self.assertEqual(_move_selection(alive_grid, (2, 1), "down"), (2, 1))
+        self.assertEqual(_move_selection(alive_grid, (2, 1), "down"), (3, 0))
+        self.assertEqual(_move_selection(alive_grid, (3, 0), "left"), (3, 0))
+        self.assertEqual(_move_selection(alive_grid, (3, 0), "up"), (2, 0))
+        self.assertEqual(_move_selection(alive_grid, (2, 1), "down"), (3, 0))
 
     def test_clamp_selection_snaps_to_filled_column(self) -> None:
         quit_only_grid = (("quit", None),)
@@ -397,10 +402,116 @@ class CliTamagotchiTests(unittest.TestCase):
         grid = build_action_grid(pet_state, self.storage)
         self.assertEqual(
             grid,
-            (("new_pet", "quit"),),
+            (
+                ("new_pet", "graveyard"),
+                ("quit", None),
+            ),
         )
 
+    def test_storage_appends_graveyard_once_when_pet_becomes_dead(self) -> None:
+        pet_state = create_new_pet(self.base_time, name="Rip")
+        self.storage.save(pet_state)
+        loaded = self.storage.load()
+        self.assertIsNotNone(loaded)
+        assert loaded is not None
+        loaded.is_alive = False
+        loaded.stage = STAGE_DEAD
+        loaded.graveyard_needs_entry = True
+        died_at = self.base_time + timedelta(hours=2)
+        loaded.stage_started_at = died_at
+        self.storage.save(loaded)
+        self.storage.save(loaded)
+        entries = self.storage.load_graveyard()
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0].name, "Rip")
+        self.assertEqual(entries[0].died_at, died_at)
+
+    def test_storage_appends_graveyard_for_each_new_death_flag(self) -> None:
+        first = create_new_pet(self.base_time, name="Alpha")
+        self.storage.save(first)
+        alpha = self.storage.load()
+        self.assertIsNotNone(alpha)
+        assert alpha is not None
+        alpha.is_alive = False
+        alpha.stage = STAGE_DEAD
+        alpha.graveyard_needs_entry = True
+        alpha.stage_started_at = self.base_time + timedelta(days=1)
+        self.storage.save(alpha)
+
+        second = create_new_pet(self.base_time + timedelta(days=2), name="Beta")
+        self.storage.save(second)
+        beta = self.storage.load()
+        self.assertIsNotNone(beta)
+        assert beta is not None
+        beta.is_alive = False
+        beta.stage = STAGE_DEAD
+        beta.graveyard_needs_entry = True
+        beta.stage_started_at = self.base_time + timedelta(days=3)
+        self.storage.save(beta)
+
+        entries = self.storage.load_graveyard()
+        self.assertEqual(len(entries), 2)
+        self.assertEqual({entry.name for entry in entries}, {"Alpha", "Beta"})
+
+    def test_save_dead_before_hatch_records_graveyard_then_egg_save(self) -> None:
+        dead = create_new_pet(self.base_time, name="Gone")
+        self.storage.save(dead)
+        loaded = self.storage.load()
+        self.assertIsNotNone(loaded)
+        assert loaded is not None
+        loaded.is_alive = False
+        loaded.stage = STAGE_DEAD
+        loaded.graveyard_needs_entry = True
+        loaded.stage_started_at = self.base_time + timedelta(hours=1)
+        self.storage.save_dead_before_hatching_replacement(loaded)
+        egg = create_new_pet(self.base_time + timedelta(days=1), name="New")
+        self.storage.save(egg)
+        grave = self.storage.load_graveyard()
+        self.assertEqual(len(grave), 1)
+        self.assertEqual(grave[0].name, "Gone")
+
+    def test_engine_death_triggers_graveyard_on_save(self) -> None:
+        pet_state = create_new_pet(self.base_time, name="Goner")
+        pet_state.health = 0
+        pet_state.last_tick_at = self.base_time
+        reconcile_state(pet_state, self.base_time + timedelta(minutes=TICK_MINUTES))
+        self.assertFalse(pet_state.is_alive)
+        self.assertTrue(pet_state.graveyard_needs_entry)
+        self.storage.save(pet_state)
+        self.assertFalse(pet_state.graveyard_needs_entry)
+        entries = self.storage.load_graveyard()
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0].name, "Goner")
+
+    @patch("cli_tamagotchi.cli.pick_random_pet_name", return_value="Nova")
+    @patch("cli_tamagotchi.engine.roll_starting_character", return_value="Cat")
+    def test_graveyard_command_lists_entries(self, _mock_roll: object, _mock_name: object) -> None:
+        write_graveyard(
+            self.storage.graveyard_path,
+            [
+                GraveyardEntry(
+                    name="Gone",
+                    character="Cat",
+                    stage=STAGE_DEAD,
+                    created_at=self.base_time,
+                    died_at=self.base_time + timedelta(days=1),
+                )
+            ],
+        )
+        stdout = io.StringIO()
+        exit_code = main(
+            argv=["graveyard"],
+            storage=self.storage,
+            now_provider=lambda: self.base_time,
+            output=stdout,
+            input_stream=io.StringIO(""),
+        )
+        self.assertEqual(exit_code, 0)
+        self.assertIn("Gone", stdout.getvalue())
+
     def test_cli_new_command_rejects_when_pet_alive(self) -> None:
+        alive = create_new_pet(self.base_time, name="Alive")
+        self.storage.save(alive)
         stdout = io.StringIO()
         exit_code = main(
             argv=["new"],
@@ -477,10 +588,10 @@ class CliTamagotchiTests(unittest.TestCase):
 
     def test_eating_sprite_differs_from_idle(self) -> None:
         now = datetime(2020, 1, 1, 12, 0, 0)
-        idle = get_sprite_lines("Cat", "Egg", "happy", is_asleep=False, animation_time=now)
+        idle = get_sprite_lines("Cat", "Baby", "happy", is_asleep=False, animation_time=now)
         eating = get_sprite_lines(
             "Cat",
-            "Egg",
+            "Baby",
             "happy",
             is_asleep=False,
             reaction_pose="eating",

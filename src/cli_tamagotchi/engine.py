@@ -317,6 +317,7 @@ def _apply_tick(pet_state: PetState, tick_time: datetime, rng: Random | None = N
         pet_state.is_alive = False
         pet_state.stage = STAGE_DEAD
         pet_state.stage_started_at = tick_time
+        pet_state.graveyard_needs_entry = True
         pet_state.add_event(f"{pet_state.name} has passed away.", tick_time)
 
 
