@@ -2,25 +2,23 @@
 
 `cli-tamagotchi` is a terminal-first Tamagotchi. It gives you one persistent pet, keeps aging it while the CLI is closed, and lets you care for it with a small `tama` command set.
 
-## MVP Features
+## Features
 
-- One pet stored locally in `~/.cli-tamagotchi/pet.json`
-- Core stats: Hunger, Happiness, Health, Weight
-- Pet metadata shown in the UI: Character, Stage, and Stage Age
-- Offline decay based on elapsed real time
-- Four care actions: `feed`, `play`, `lights`, `clean`
-- Life stages: `Egg`, `Baby`, `Child`, `Adult`
-- Event log stored with the pet state
-- Terminal UI rendered with `rich`
-- Two ways to interact:
-  - Direct subcommands for quick actions
-  - A minimal interactive loop with `tama`
+- **One active pet** in `~/.cli-tamagotchi/pet.json` (override the data directory with `CLI_TAMAGOTCHI_HOME`)
+- **Graveyard** for past pets in `~/.cli-tamagotchi/graveyard.json`
+- **Stats:** hunger, happiness, health, weight, energy, dirtiness; wake/sleep; optional illnesses
+- **Life stages:** Egg → Baby → Child → Adult (time-based growth), with death when care or health fails
+- **Offline decay** reconciled from elapsed real time whenever you run a command
+- **Care actions:** feed, play, lights on/off, clean, medicine (one-hour cooldown; helps cure illness)
+- **Event log** stored with the pet state (trimmed to the most recent entries)
+- **ASCII sprites** with mood and stage-aware animation in the UI
+- **CLI subcommands** for quick actions, plus **`tama` alone** for the interactive loop
 
 ## Requirements
 
-- Python `3.9+`
+- Python **3.9+**
 
-## Run Locally
+## Install and run
 
 ```bash
 python3 -m venv .venv
@@ -28,7 +26,7 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-After installation, use the CLI:
+### CLI (`tama`)
 
 ```bash
 tama status
@@ -36,43 +34,41 @@ tama feed
 tama play
 tama lights
 tama clean
-tama
+tama medicine
+tama logs
+tama new          # only when no living pet
+tama graveyard
+tama              # interactive UI
 ```
 
-You can also run it without installing the console script:
+Run without installing the console script:
 
 ```bash
 PYTHONPATH=src python3 -m cli_tamagotchi status
 ```
 
-## Interactive Mode
+Use `tama -h` for built-in help on subcommands.
 
-Run `tama` with no subcommand to open the lightweight terminal loop. The UI supports:
+## Interactive mode
 
-- `feed`
-- `play`
-- `lights`
-- `clean`
-- `status`
-- `quit`
+Running `tama` with no arguments starts the main UI: status, animated pet, stat bars, and an action grid. On a proper TTY, navigation uses single-key input; otherwise a simple line-based fallback is used.
 
-## Persistence Model
+While your pet is alive you can use feed, play, lights, clean, medicine, open the **graveyard** view, or quit. After death you can start a **new pet** (when allowed) or browse the graveyard. The event log can be scrolled when shown in the interactive layout.
 
-The pet is stored as JSON under `~/.cli-tamagotchi/`. The saved state includes:
+## Persistence
 
-- Current stage
-- Current character
-- Current weight
-- Current stats
-- Sleep state and stage start timestamp
-- Dirtiness and awake time
-- Creation, update, interaction, and tick timestamps
-- Recent event log
-
-Offline progression is reconciled from the last processed tick whenever you run a command.
+State lives under `~/.cli-tamagotchi/` by default (or under `CLI_TAMAGOTCHI_HOME` if set). The save includes name, character, stage, weight, stats, sleep and dirtiness, illness and medicine timestamps, timestamps for creation/updates/ticks/interactions, and the recent event log. Offline progression runs from the last processed tick when any command loads the pet.
 
 ## Tests
 
 ```bash
 python3 -m unittest discover -s tests
 ```
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## License
+
+MIT — see [LICENSE](LICENSE).
