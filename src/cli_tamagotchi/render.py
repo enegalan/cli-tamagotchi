@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from rich.align import Align
 from rich import box
 from rich.console import Group
@@ -45,9 +47,18 @@ def render_status(
     compact: bool = False,
     event_offset: int = 0,
     event_limit: int = 6,
+    animation_time: datetime | None = None,
 ):
     mood = pet_state.mood()
-    raw_sprite_lines = get_sprite_lines(pet_state.character, pet_state.stage, mood, pet_state.is_asleep)
+    reaction_pose = pet_state.reaction_pose_id(animation_time)
+    raw_sprite_lines = get_sprite_lines(
+        pet_state.character,
+        pet_state.stage,
+        mood,
+        pet_state.is_asleep,
+        reaction_pose=reaction_pose,
+        animation_time=animation_time,
+    )
     sprite_indent = min(len(line) - len(line.lstrip(" ")) for line in raw_sprite_lines if line.strip())
     sprite_lines = [line[sprite_indent:] for line in raw_sprite_lines]
     sprite_width = max(len(line) for line in sprite_lines)
@@ -168,8 +179,12 @@ def render_interactive_view(
     selected_action: str,
     event_offset: int = 0,
     status_message: Text | None = None,
+    animation_time: datetime | None = None,
 ):
-    sections = [render_status(pet_state, event_offset=event_offset), render_actions(pet_state, selected_action)]
+    sections = [
+        render_status(pet_state, event_offset=event_offset, animation_time=animation_time),
+        render_actions(pet_state, selected_action),
+    ]
     if status_message is not None:
         sections.append(
             Panel(

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from .characters import CHARACTER_STYLE_BY_NAME, FALLBACK_CHARACTER
 
 MAX_LOG_EVENTS = 50
+REACTION_ANIMATION_WINDOW = timedelta(seconds=2.8)
 STAGE_EGG = "Egg"
 STAGE_BABY = "Baby"
 STAGE_CHILD = "Child"
@@ -90,6 +91,27 @@ class PetState:
     def stage_age_hours(self) -> int:
         stage_age = self.updated_at - self.stage_started_at
         return max(0, int(stage_age.total_seconds() // 3600))
+
+    def reaction_pose_id(self, now: datetime | None) -> str | None:
+        if now is None:
+            return None
+        if not self.is_alive or self.stage == STAGE_DEAD:
+            return None
+        if self.is_asleep:
+            return None
+        if not self.events:
+            return None
+        last_entry = self.events[-1]
+        if now - last_entry.timestamp > REACTION_ANIMATION_WINDOW:
+            return None
+        message_lower = last_entry.message.lower()
+        if "you fed" in message_lower:
+            return "eating"
+        if "you played with" in message_lower:
+            return "playing"
+        if "you cleaned" in message_lower and "already" not in message_lower:
+            return "cleaning"
+        return None
 
     def to_dict(self) -> dict[str, Any]:
         return {

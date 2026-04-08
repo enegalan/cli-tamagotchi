@@ -27,6 +27,8 @@ except ImportError:  # pragma: no cover
 SUPPORTED_ACTIONS = ("feed", "play", "lights", "clean")
 EVENT_WINDOW_SIZE = 6
 NO_ACTION = "__no_action__"
+IDLE_POLL_NO_INPUT = "idle_poll"
+INTERACTIVE_IDLE_TIMEOUT_SECONDS = 0.3
 ACTION_GRID = (
     ("feed", "play"),
     ("lights", "clean"),
@@ -80,13 +82,13 @@ def main(
 
     if args.command == "status":
         storage.save(pet_state)
-        console.print(render_status(pet_state, compact=True))
+        console.print(render_status(pet_state, compact=True, animation_time=now_provider()))
         return 0
 
     result = apply_action(pet_state, args.command, now_provider())
     storage.save(result.pet_state)
     console.print(result.message, style="bold green")
-    console.print(render_status(result.pet_state, compact=True))
+    console.print(render_status(result.pet_state, compact=True, animation_time=now_provider()))
     return 0
 
 
@@ -127,6 +129,7 @@ def run_interactive_loop(
             pet_state,
             _action_at_position(selected_position),
             event_offset=event_offset,
+            animation_time=now_provider(),
         ),
         console=console,
         screen=True,
@@ -139,11 +142,16 @@ def run_interactive_loop(
                     _action_at_position(selected_position),
                     event_offset=event_offset,
                     status_message=status_message,
+                    animation_time=now_provider(),
                 ),
                 refresh=True,
             )
 
-            raw_action = _read_action_input(output, input_stream)
+            raw_action = _read_action_input(
+                output,
+                input_stream,
+                idle_timeout_seconds=INTERACTIVE_IDLE_TIMEOUT_SECONDS,
+            )
             if raw_action is None:
                 storage.save(pet_state)
                 return 0
@@ -175,6 +183,7 @@ def run_interactive_loop(
                         _action_at_position(selected_position),
                         event_offset=event_offset,
                         status_message=Text("Goodbye.", style="bold cyan"),
+                        animation_time=now_provider(),
                     ),
                     refresh=True,
                 )
@@ -278,9 +287,15 @@ def _supports_single_key_input(input_stream: TextIO) -> bool:
     return input_is_tty and has_fileno
 
 
-def _read_action_input(output: TextIO, input_stream: TextIO) -> Optional[str]:
+def _read_action_input(
+    output: TextIO,
+    input_stream: TextIO,
+    idle_timeout_seconds: Optional[float] = None,
+) -> Optional[str]:
     if _supports_single_key_input(input_stream):
-        single_key_action = _read_single_key(input_stream)
+        single_key_action = _read_single_key(input_stream, idle_timeout_seconds=idle_timeout_seconds)
+        if single_key_action == IDLE_POLL_NO_INPUT:
+            return NO_ACTION
         if single_key_action is None:
             return NO_ACTION
         return single_key_action
@@ -293,11 +308,18 @@ def _read_action_input(output: TextIO, input_stream: TextIO) -> Optional[str]:
     return raw_command
 
 
-def _read_single_key(input_stream: TextIO) -> Optional[str]:
+def _read_single_key(
+    input_stream: TextIO,
+    idle_timeout_seconds: Optional[float] = None,
+) -> Optional[str]:
     file_descriptor = input_stream.fileno()
     previous_settings = termios.tcgetattr(file_descriptor)
     try:
         tty.setraw(file_descriptor)
+        if idle_timeout_seconds is not None:
+            ready_descriptors, _, _ = select.select([file_descriptor], [], [], idle_timeout_seconds)
+            if not ready_descriptors:
+                return IDLE_POLL_NO_INPUT
         pressed_key = _read_key_from_descriptor(file_descriptor)
         if not pressed_key:
             return None

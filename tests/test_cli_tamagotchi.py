@@ -25,9 +25,9 @@ from cli_tamagotchi.cli import (
 )
 from cli_tamagotchi.characters import roll_starting_character
 from cli_tamagotchi.engine import TICK_MINUTES, apply_action, create_new_pet, reconcile_state
-from cli_tamagotchi.models import STAGE_BABY
+from cli_tamagotchi.models import REACTION_ANIMATION_WINDOW, STAGE_BABY
 from cli_tamagotchi.render import render_status
-from cli_tamagotchi.sprites import get_sprite_lines
+from cli_tamagotchi.sprites import FRAME_INTERVAL_MS, get_sprite_lines
 from cli_tamagotchi.storage import PetStorage
 
 
@@ -176,6 +176,55 @@ class CliTamagotchiTests(unittest.TestCase):
 
         self.assertNotEqual(sleeping_lines, awake_lines)
 
+    def test_get_sprite_lines_animation_time_none_is_deterministic(self) -> None:
+        first_lines = get_sprite_lines("Cat", "Baby", "happy", is_asleep=False, animation_time=None)
+        second_lines = get_sprite_lines("Cat", "Baby", "happy", is_asleep=False, animation_time=None)
+        self.assertEqual(first_lines, second_lines)
+
+    def test_get_sprite_lines_two_animation_times_can_differ(self) -> None:
+        base = datetime(2020, 1, 1, 12, 0, 0)
+        t0 = base
+        t1 = base + timedelta(milliseconds=FRAME_INTERVAL_MS)
+        lines_a = get_sprite_lines("Cat", "Baby", "happy", is_asleep=False, animation_time=t0)
+        lines_b = get_sprite_lines("Cat", "Baby", "happy", is_asleep=False, animation_time=t1)
+        self.assertNotEqual(lines_a, lines_b)
+
+    def test_reaction_pose_id_matches_recent_feed_play_clean(self) -> None:
+        pet_state = create_new_pet(self.base_time, name="T")
+        pet_state.add_event("You fed T.", self.base_time)
+        self.assertEqual(pet_state.reaction_pose_id(self.base_time + timedelta(seconds=1)), "eating")
+        pet_state.events.clear()
+        pet_state.add_event("You played with T.", self.base_time)
+        self.assertEqual(pet_state.reaction_pose_id(self.base_time + timedelta(seconds=1)), "playing")
+        pet_state.events.clear()
+        pet_state.add_event("You cleaned T's space.", self.base_time)
+        self.assertEqual(pet_state.reaction_pose_id(self.base_time + timedelta(seconds=1)), "cleaning")
+
+    def test_reaction_pose_id_expires_after_window(self) -> None:
+        pet_state = create_new_pet(self.base_time, name="T")
+        pet_state.add_event("You fed T.", self.base_time)
+        late = self.base_time + REACTION_ANIMATION_WINDOW + timedelta(seconds=0.5)
+        self.assertIsNone(pet_state.reaction_pose_id(late))
+
+    def test_reaction_pose_id_none_while_asleep(self) -> None:
+        pet_state = create_new_pet(self.base_time, name="T")
+        pet_state.is_asleep = True
+        pet_state.add_event("You fed T.", self.base_time)
+        self.assertIsNone(pet_state.reaction_pose_id(self.base_time + timedelta(seconds=1)))
+
+    def test_eating_sprite_differs_from_idle(self) -> None:
+        now = datetime(2020, 1, 1, 12, 0, 0)
+        idle = get_sprite_lines("Cat", "Egg", "happy", is_asleep=False, animation_time=now)
+        eating = get_sprite_lines(
+            "Cat",
+            "Egg",
+            "happy",
+            is_asleep=False,
+            reaction_pose="eating",
+            animation_time=now,
+        )
+        self.assertNotEqual(idle, eating)
+
     def test_roll_starting_character_deterministic_by_seed(self) -> None:
         self.assertEqual(roll_starting_character(random.Random(42)), "Cat")
         self.assertEqual(roll_starting_character(random.Random(0)), "Fox")
@@ -221,5 +270,18 @@ class CliTamagotchiTests(unittest.TestCase):
             "cli_tamagotchi.cli._read_single_key", return_value=None
         ):
             self.assertEqual(_read_action_input(io.StringIO(), io.StringIO()), NO_ACTION)
+
+    def test_read_action_input_idle_timeout_returns_no_action(self) -> None:
+        keyboard_input = io.StringIO()
+        keyboard_input.fileno = lambda: 0  # type: ignore[attr-defined]
+        with patch("cli_tamagotchi.cli._supports_single_key_input", return_value=True), patch(
+            "cli_tamagotchi.cli.select.select", return_value=([], [], [])
+        ), patch("cli_tamagotchi.cli.termios.tcgetattr", return_value=object()), patch(
+            "cli_tamagotchi.cli.termios.tcsetattr"
+        ), patch("cli_tamagotchi.cli.tty.setraw"):
+            self.assertEqual(
+                _read_action_input(io.StringIO(), keyboard_input, idle_timeout_seconds=0.3),
+                NO_ACTION,
+            )
 if __name__ == "__main__":
     unittest.main()
