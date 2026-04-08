@@ -45,13 +45,6 @@ def build_action_grid(pet_state: PetState, storage: PetStorage) -> tuple[tuple[s
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="tama", description="Care for your terminal pet.")
-    parser.add_argument(
-        "--name",
-        default=None,
-        metavar="NAME",
-        help="Pet name; skips the name prompt when creating. Empty value picks a random name.",
-    )
-
     subparsers = parser.add_subparsers(dest="command")
     subparsers.add_parser("status", help="Show the current pet status.")
     subparsers.add_parser("feed", help="Feed your pet.")
@@ -79,14 +72,14 @@ def main(
     console = Console(file=output, width=100)
 
     pet_state = load_or_create_pet(
-        storage, now_provider(), args.name, output=output, input_stream=input_stream
+        storage, now_provider(), output=output, input_stream=input_stream
     )
 
     if args.command == "new":
         if pet_state.is_alive:
             console.print("A pet is already alive. You can only have one living pet.", style="bold red")
             return 1
-        new_name = name_from_flag_or_prompt(args.name, output, input_stream)
+        new_name = prompt_pet_name_on_hatch(output, input_stream)
         pet_state = create_new_pet(now=now_provider(), name=new_name)
         storage.save(pet_state)
         console.print(f"A new pet, {pet_state.name}, has hatched.", style="bold green")
@@ -101,7 +94,6 @@ def main(
             console=console,
             output=output,
             input_stream=input_stream,
-            explicit_pet_name=args.name,
         )
 
     if args.command == "status":
@@ -116,16 +108,12 @@ def main(
     return 0
 
 
-def name_from_flag_or_prompt(
-    explicit_flag: Optional[str],
+def prompt_pet_name_on_hatch(
     output: TextIO,
     input_stream: TextIO,
     *,
     live: Optional[Live] = None,
 ) -> str:
-    if explicit_flag is not None:
-        stripped_flag = explicit_flag.strip()
-        return stripped_flag if stripped_flag else pick_random_pet_name()
     if live is not None:
         live.stop()
     try:
@@ -151,14 +139,13 @@ def _prompt_pet_name_line(output: TextIO, input_stream: TextIO) -> str:
 def load_or_create_pet(
     storage: PetStorage,
     now: datetime,
-    pet_name: Optional[str],
     *,
     output: TextIO,
     input_stream: TextIO,
 ) -> PetState:
     pet_state = storage.load()
     if pet_state is None:
-        resolved_name = name_from_flag_or_prompt(pet_name, output, input_stream)
+        resolved_name = prompt_pet_name_on_hatch(output, input_stream)
         pet_state = create_new_pet(now=now, name=resolved_name)
     else:
         reconcile_state(pet_state, now)
@@ -174,7 +161,6 @@ def run_interactive_loop(
     console: Console,
     output: TextIO,
     input_stream: TextIO,
-    explicit_pet_name: Optional[str],
 ) -> int:
     status_message: Optional[Text] = None
     selected_position = (0, 0)
@@ -187,7 +173,6 @@ def run_interactive_loop(
             console=console,
             output=output,
             input_stream=input_stream,
-            explicit_pet_name=explicit_pet_name,
         )
 
     with Live(
@@ -275,9 +260,7 @@ def run_interactive_loop(
                 if not storage.can_create_new_pet(pet_state):
                     status_message = Text("Cannot start a new pet right now.", style="bold red")
                     continue
-                hatch_name = name_from_flag_or_prompt(
-                    explicit_pet_name, output, input_stream, live=live
-                )
+                hatch_name = prompt_pet_name_on_hatch(output, input_stream, live=live)
                 pet_state = create_new_pet(now_provider(), hatch_name)
                 storage.save(pet_state)
                 event_offset = _default_event_offset(pet_state, EVENT_WINDOW_SIZE)
@@ -312,7 +295,6 @@ def _run_interactive_loop_fallback(
     console: Console,
     output: TextIO,
     input_stream: TextIO,
-    explicit_pet_name: Optional[str],
 ) -> int:
     status_message: Optional[Text] = None
     selected_position = (0, 0)
@@ -371,7 +353,7 @@ def _run_interactive_loop_fallback(
             if not storage.can_create_new_pet(pet_state):
                 status_message = Text("Cannot start a new pet right now.", style="bold red")
                 continue
-            hatch_name = name_from_flag_or_prompt(explicit_pet_name, output, input_stream)
+            hatch_name = prompt_pet_name_on_hatch(output, input_stream)
             pet_state = create_new_pet(now_provider(), hatch_name)
             storage.save(pet_state)
             event_offset = _default_event_offset(pet_state, EVENT_WINDOW_SIZE)

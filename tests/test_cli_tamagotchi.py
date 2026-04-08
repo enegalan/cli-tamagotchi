@@ -19,7 +19,7 @@ from cli_tamagotchi.cli import (
     _clamp_selection,
     _default_event_offset,
     build_action_grid,
-    name_from_flag_or_prompt,
+    prompt_pet_name_on_hatch,
     _move_event_offset,
     _move_selection,
     _normalize_action_input,
@@ -55,12 +55,13 @@ class CliTamagotchiTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
 
+    @patch("cli_tamagotchi.cli.pick_random_pet_name", return_value="Nova")
     @patch("cli_tamagotchi.engine.roll_starting_character", return_value="Cat")
-    def test_status_command_creates_and_persists_pet(self, _mock_roll: object) -> None:
+    def test_status_command_creates_and_persists_pet(self, _mock_roll: object, _mock_name: object) -> None:
         stdout = io.StringIO()
 
         exit_code = main(
-            argv=["--name", "Nova", "status"],
+            argv=["status"],
             storage=self.storage,
             now_provider=lambda: self.base_time,
             output=stdout,
@@ -335,7 +336,7 @@ class CliTamagotchiTests(unittest.TestCase):
         self.storage.save(pet_state)
 
         exit_code = main(
-            argv=["--name", "Loop"],
+            argv=[],
             storage=self.storage,
             now_provider=lambda: self.base_time,
             output=stdout,
@@ -346,22 +347,16 @@ class CliTamagotchiTests(unittest.TestCase):
         self.assertIn("You fed Loop.", stdout.getvalue())
         self.assertIn("Goodbye.", stdout.getvalue())
 
-    def test_name_from_flag_or_prompt_reads_tty_line(self) -> None:
+    def test_prompt_pet_name_on_hatch_reads_tty_line(self) -> None:
         out = io.StringIO()
         stdin = TtyStringIO("Pip\n")
-        self.assertEqual(name_from_flag_or_prompt(None, out, stdin), "Pip")
+        self.assertEqual(prompt_pet_name_on_hatch(out, stdin), "Pip")
         self.assertIn("Pet name", out.getvalue())
 
     @patch("cli_tamagotchi.cli.pick_random_pet_name", return_value="Zed")
-    def test_name_from_flag_or_prompt_empty_line_uses_random(self, _mock: object) -> None:
+    def test_prompt_pet_name_on_hatch_empty_line_uses_random(self, _mock: object) -> None:
         stdin = TtyStringIO("\n")
-        self.assertEqual(name_from_flag_or_prompt(None, io.StringIO(), stdin), "Zed")
-
-    def test_name_from_flag_skips_prompt(self) -> None:
-        out = io.StringIO()
-        stdin = TtyStringIO("ignored\n")
-        self.assertEqual(name_from_flag_or_prompt("Ada", out, stdin), "Ada")
-        self.assertEqual(out.getvalue(), "")
+        self.assertEqual(prompt_pet_name_on_hatch(io.StringIO(), stdin), "Zed")
 
     def test_normalize_action_input_supports_commands(self) -> None:
         self.assertEqual(_normalize_action_input("play"), "play")
@@ -408,7 +403,7 @@ class CliTamagotchiTests(unittest.TestCase):
     def test_cli_new_command_rejects_when_pet_alive(self) -> None:
         stdout = io.StringIO()
         exit_code = main(
-            argv=["--name", "X", "new"],
+            argv=["new"],
             storage=self.storage,
             now_provider=lambda: self.base_time,
             output=stdout,
