@@ -10,6 +10,8 @@ from pathlib import Path
 from random import Random
 from unittest.mock import patch
 
+from rich.console import Console
+
 PROJECT_SRC = Path(__file__).resolve().parents[1] / "src"
 if str(PROJECT_SRC) not in sys.path:
     sys.path.insert(0, str(PROJECT_SRC))
@@ -31,7 +33,7 @@ from cli_tamagotchi.characters import roll_starting_character
 from cli_tamagotchi.engine import TICK_MINUTES, apply_action, create_new_pet, reconcile_state
 from cli_tamagotchi.illnesses import Illness
 from cli_tamagotchi.models import ActiveIllness, REACTION_ANIMATION_WINDOW, STAGE_BABY, STAGE_DEAD
-from cli_tamagotchi.render import render_status
+from cli_tamagotchi.render import render_event_log, render_status
 from cli_tamagotchi.sprites import FRAME_INTERVAL_MS, get_sprite_lines
 from cli_tamagotchi.graveyard import GraveyardEntry, write_graveyard
 from cli_tamagotchi.storage import PetStorage
@@ -99,6 +101,42 @@ class CliTamagotchiTests(unittest.TestCase):
         self.assertIsNotNone(persisted_pet)
         assert persisted_pet is not None
         self.assertEqual(persisted_pet.name, "Qubit")
+
+    @patch("cli_tamagotchi.cli.pick_random_pet_name", return_value="Nova")
+    @patch("cli_tamagotchi.engine.roll_starting_character", return_value="Cat")
+    def test_logs_command_prints_event_log(self, _mock_roll: object, _mock_name: object) -> None:
+        pet_state = create_new_pet(self.base_time, name="Nova")
+        pet_state.add_event("Custom test event.", self.base_time)
+        self.storage.save(pet_state)
+        stdout = io.StringIO()
+        exit_code = main(
+            argv=["logs"],
+            storage=self.storage,
+            now_provider=lambda: self.base_time,
+            output=stdout,
+            input_stream=io.StringIO(""),
+        )
+        self.assertEqual(exit_code, 0)
+        output_text = stdout.getvalue()
+        self.assertIn("Event log", output_text)
+        self.assertIn("Nova", output_text)
+        self.assertIn("Custom test event.", output_text)
+        self.assertIn("hatched", output_text.lower())
+
+    def test_render_event_log_lists_all_events_in_order(self) -> None:
+        pet_state = create_new_pet(self.base_time, name="Zed")
+        pet_state.events.clear()
+        pet_state.add_event("First line.", self.base_time)
+        pet_state.add_event("Second line.", self.base_time + timedelta(minutes=1))
+        panel = render_event_log(pet_state)
+        buffer = io.StringIO()
+        Console(file=buffer, width=120, force_terminal=True).print(panel)
+        output_text = buffer.getvalue()
+        first_pos = output_text.find("First line.")
+        second_pos = output_text.find("Second line.")
+        self.assertNotEqual(first_pos, -1)
+        self.assertNotEqual(second_pos, -1)
+        self.assertLess(first_pos, second_pos)
 
     def test_offline_reconcile_advances_stage_and_reduces_stats(self) -> None:
         pet_state = create_new_pet(self.base_time, name="Nova")

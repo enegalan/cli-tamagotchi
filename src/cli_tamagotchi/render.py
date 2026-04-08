@@ -212,6 +212,32 @@ def render_status(
     return Group(*sections)
 
 
+def render_event_log(pet_state: PetState) -> Panel:
+    events_table = Table.grid(expand=True, padding=(0, 1))
+    events_table.add_column(style="dim", width=16)
+    events_table.add_column(ratio=1)
+    total_events = len(pet_state.events)
+    if pet_state.events:
+        for event in pet_state.events:
+            events_table.add_row(
+                event.timestamp.strftime("%Y-%m-%d %H:%M"),
+                _event_text(event.message),
+            )
+    else:
+        events_table.add_row("-", "Nothing yet.")
+
+    subtitle = f"{total_events} event{'s' if total_events != 1 else ''}" if total_events else None
+    title = Text.assemble("Event log — ", (pet_state.name, "bold"))
+    return Panel(
+        events_table,
+        title=title,
+        subtitle=subtitle,
+        border_style="dim",
+        box=box.ROUNDED,
+        padding=(0, 1),
+    )
+
+
 def render_interactive_view(
     pet_state: PetState,
     selected_action: str,

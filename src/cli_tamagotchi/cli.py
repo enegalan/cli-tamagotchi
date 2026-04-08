@@ -18,6 +18,7 @@ from .render import (
     GRAVEYARD_PAGE_SIZE,
     NAME_HATCH_MAX_CHARS,
     _lights_action_name,
+    render_event_log,
     render_graveyard_view,
     render_interactive_view,
     render_name_hatch_view,
@@ -65,6 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("clean", help="Clean your pet's space.")
     subparsers.add_parser("medicine", help="Give medicine (cooldown 1h, cures illness, restores health).")
     subparsers.add_parser("new", help="Start a new pet (only if none is alive).")
+    subparsers.add_parser("logs", help="Show the pet event log.")
     subparsers.add_parser("graveyard", help="List pets that have passed away.")
     return parser
 
@@ -124,6 +126,11 @@ def main(
     if args.command == "status":
         storage.save(pet_state)
         console.print(render_status(pet_state, compact=True, animation_time=now_provider()))
+        return 0
+
+    if args.command == "logs":
+        storage.save(pet_state)
+        console.print(render_event_log(pet_state))
         return 0
 
     result = apply_action(pet_state, args.command, now_provider())

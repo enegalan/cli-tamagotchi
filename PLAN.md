@@ -52,7 +52,7 @@
 - [X] `tama clean` — Clean pet
 - [X] `tama medicine` — Give medicine
 - [X] `tama new` — Start a new pet
-- [ ] `tama logs` — Show event log
+- [X] `tama logs` — Show event log
 - [X] `tama graveyard` — View deceased pets
 
 ### Mini-Games
