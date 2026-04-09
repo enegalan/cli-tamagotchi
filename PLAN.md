@@ -56,7 +56,7 @@
 
 ### Packaging
 
-- [ ] Prepare PyPI package for `cli-tamagotchi`
+- [X] Prepare PyPI package for `cli-tamagotchi`
 - [X] Documentation:
   - [X] README,
   - [X] CLI help

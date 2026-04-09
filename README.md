@@ -22,6 +22,12 @@
 ## Install and run
 
 ```bash
+pip install cli-tamagotchi
+```
+
+Editable install from a clone:
+
+```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
