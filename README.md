@@ -25,6 +25,21 @@
 pip install cli-tamagotchi
 ```
 
+### Homebrew
+
+Install the formula file directly from GitHub (branch `main`):
+
+```bash
+brew install https://raw.githubusercontent.com/enegalan/cli-tamagotchi/main/Formula/cli-tamagotchi.rb
+```
+
+Optional: add the repo as a tap if you want `brew upgrade cli-tamagotchi` to track it:
+
+```bash
+brew tap enegalan/cli-tamagotchi https://github.com/enegalan/cli-tamagotchi
+brew install cli-tamagotchi
+```
+
 Editable install from a clone:
 
 ```bash
