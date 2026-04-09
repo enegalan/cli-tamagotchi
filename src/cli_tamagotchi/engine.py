@@ -26,6 +26,7 @@ from .models import (
     clamp_stat,
     death_morph_for_live_stage,
 )
+from .plugins.manager import emit_plugin_event
 
 TICK_MINUTES = 0.25
 DIRTINESS_TICK_INTERVAL = 2
@@ -214,13 +215,21 @@ def reconcile_state(pet_state: PetState, now: datetime, rng: Random | None = Non
 
     elapsed = now - pet_state.last_tick_at
     tick_count = int(elapsed.total_seconds() // (TICK_MINUTES * 60))
-    stage_before = pet_state.stage
 
     for tick_index in range(tick_count):
         tick_time = pet_state.last_tick_at + timedelta(minutes=TICK_MINUTES * (tick_index + 1))
         _apply_tick(pet_state, tick_time, rng)
+        emit_plugin_event("on_tick", pet_state=pet_state, tick_time=tick_time)
         new_stage = stage_for_age(tick_time - pet_state.created_at, pet_state.is_alive)
         if new_stage != pet_state.stage:
+            old_stage = pet_state.stage
+            emit_plugin_event(
+                "on_stage_change",
+                pet_state=pet_state,
+                old_stage=old_stage,
+                new_stage=new_stage,
+                at=tick_time,
+            )
             pet_state.stage = new_stage
             pet_state.stage_started_at = tick_time
             if pet_state.is_alive:
@@ -233,8 +242,20 @@ def reconcile_state(pet_state: PetState, now: datetime, rng: Random | None = Non
     pet_state.last_tick_at = pet_state.last_tick_at + timedelta(minutes=tick_count * TICK_MINUTES)
     pet_state.updated_at = now
 
-    if tick_count == 0 and stage_before != pet_state.stage:
-        pet_state.add_event(f"{pet_state.name} grew into a {pet_state.stage.lower()}.", now)
+    if tick_count == 0:
+        new_stage_idle = stage_for_age(now - pet_state.created_at, pet_state.is_alive)
+        if pet_state.is_alive and new_stage_idle != pet_state.stage:
+            old_stage_idle = pet_state.stage
+            emit_plugin_event(
+                "on_stage_change",
+                pet_state=pet_state,
+                old_stage=old_stage_idle,
+                new_stage=new_stage_idle,
+                at=now,
+            )
+            pet_state.stage = new_stage_idle
+            pet_state.stage_started_at = now
+            pet_state.add_event(f"{pet_state.name} grew into a {pet_state.stage.lower()}.", now)
 
     return pet_state
 
@@ -261,6 +282,12 @@ def apply_action(pet_state: PetState, action: str, now: datetime) -> ActionResul
     message = action_messages[normalized_action](pet_state, now)
     pet_state.last_interaction_at = now
     pet_state.updated_at = now
+    emit_plugin_event(
+        "on_action",
+        pet_state=pet_state,
+        action=normalized_action,
+        now=now,
+    )
     return ActionResult(pet_state=pet_state, message=message)
 
 
@@ -321,6 +348,7 @@ def _apply_tick(pet_state: PetState, tick_time: datetime, rng: Random | None = N
         pet_state.stage_started_at = tick_time
         pet_state.graveyard_needs_entry = True
         pet_state.add_event(f"{pet_state.name} has passed away.", tick_time)
+        emit_plugin_event("on_death", pet_state=pet_state, cause="health")
 
 
 def _feed_pet(pet_state: PetState, now: datetime) -> str:

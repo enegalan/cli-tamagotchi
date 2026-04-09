@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
+import json
 import os
 import select
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -10,6 +13,7 @@ from typing import Callable, Optional, Sequence, TextIO
 
 from rich.console import Console, Group
 from rich.live import Live
+from rich.table import Table
 from rich.text import Text
 
 from .engine import apply_action, create_new_pet, pick_random_pet_name, reconcile_state
@@ -24,6 +28,7 @@ from .render import (
     render_name_hatch_view,
     render_status,
 )
+from .plugins.manager import DISTRIBUTION_PIP_SPEC, list_plugin_entry_point_specs, plugin_manager
 from .storage import PetStorage
 
 try:
@@ -68,7 +73,138 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("new", help="Start a new pet (only if none is alive).")
     subparsers.add_parser("logs", help="Show the pet event log.")
     subparsers.add_parser("graveyard", help="List pets that have passed away.")
+    plugin_parser = subparsers.add_parser("plugin", help="Plugin commands.")
+    plugin_sub = plugin_parser.add_subparsers(dest="plugin_command", required=True)
+    plugin_sub.add_parser("list", help="List plugins loaded in this process.")
+    plugin_sub.add_parser(
+        "available",
+        help="List cli_tamagotchi.plugins entry points visible in this Python environment.",
+    )
+    install_parser = plugin_sub.add_parser(
+        "install",
+        help="Pick a plugin to install or pass index / entry name (see `tama plugin available`).",
+    )
+    install_parser.add_argument(
+        "choice",
+        nargs="?",
+        default=None,
+        metavar="N|NAME",
+        help="Optional: 1-based index from the menu or setuptools entry name (e.g. claude_code).",
+    )
+    emit_parser = plugin_sub.add_parser(
+        "emit",
+        help="Invoke on_external_event on plugins (all, or one with --plugin).",
+    )
+    emit_parser.add_argument(
+        "--plugin",
+        "-p",
+        dest="plugin_target",
+        default=None,
+        metavar="NAME",
+        help="Only notify plugins matching this logical name or setuptools entry name.",
+    )
+    emit_parser.add_argument("event_type", help="Opaque event type string.")
+    emit_parser.add_argument(
+        "--data",
+        default="{}",
+        help="JSON object passed to plugins (default: {}).",
+    )
     return parser
+
+
+def _init_plugins(storage: PetStorage) -> None:
+    plugin_manager.configure(storage.base_dir)
+    plugin_manager.discover(user_plugin_dir=storage.base_dir / "plugins")
+
+
+def _pip_spec_for_entry_point(ep: importlib.metadata.EntryPoint) -> str:
+    dist = getattr(ep, "dist", None)
+    if dist is not None:
+        try:
+            return dist.metadata["Name"]
+        except Exception:
+            pass
+    return DISTRIBUTION_PIP_SPEC
+
+
+def _plugin_install_menu_rows(
+    eps: list[importlib.metadata.EntryPoint],
+) -> list[tuple[str, str, str]]:
+    """(menu label, pip_spec, match_key) — match_key is entry name or package for CLI matching."""
+    rows: list[tuple[str, str, str]] = []
+    if not eps:
+        rows.append(
+            (
+                f"{DISTRIBUTION_PIP_SPEC} (application package; registers plugins from this project)",
+                DISTRIBUTION_PIP_SPEC,
+                DISTRIBUTION_PIP_SPEC,
+            )
+        )
+        return rows
+    for ep in eps:
+        pip_spec = _pip_spec_for_entry_point(ep)
+        target = getattr(ep, "value", None) or f"{ep.module}:{ep.attr}"
+        label = f"{ep.name} — package: {pip_spec} — {target}"
+        rows.append((label, pip_spec, ep.name))
+    return rows
+
+
+def _resolve_plugin_install_choice(
+    choice: str,
+    menu_rows: list[tuple[str, str, str]],
+    console: Console,
+) -> tuple[str, str] | None:
+    """Return (pip_spec, summary_key) or None. summary_key is entry name or package id for messages."""
+    needle = choice.strip()
+    if not needle:
+        return None
+    n = len(menu_rows)
+    if needle.isdigit():
+        idx = int(needle)
+        if 1 <= idx <= n:
+            _label, pip_spec, key = menu_rows[idx - 1]
+            return pip_spec, key
+        console.print(f"Invalid index {idx}; use 1–{n}.", style="bold red")
+        return None
+    low = needle.lower()
+    for _label, pip_spec, entry_name in menu_rows:
+        if entry_name.lower() == low or pip_spec.lower() == low:
+            return pip_spec, entry_name
+    console.print(f"Unknown choice {needle!r}. Use a number or entry name from the list.", style="bold red")
+    return None
+
+
+def _prompt_plugin_install_pip_spec(
+    args_choice: str | None,
+    console: Console,
+    input_stream: TextIO,
+) -> tuple[str, str] | None:
+    """Return (pip_spec, summary_key) or None."""
+    eps = list_plugin_entry_point_specs()
+    menu_rows = _plugin_install_menu_rows(eps)
+    if args_choice is not None and args_choice.strip() != "":
+        return _resolve_plugin_install_choice(args_choice, menu_rows, console)
+
+    if not input_stream.isatty():
+        console.print(
+            "No TTY: pass a choice, e.g. `tama plugin install 1` or `tama plugin install claude_code`.",
+            style="bold red",
+        )
+        console.print("Options:")
+        for i, (label, _pip, _mk) in enumerate(menu_rows, start=1):
+            console.print(f"  {i}) {label}")
+        return None
+
+    console.print("Which plugin do you want to install? (pip installs the package that provides it)")
+    for i, (label, _pip, _mk) in enumerate(menu_rows, start=1):
+        console.print(f"  {i}) {label}")
+    try:
+        line = input_stream.readline()
+    except Exception:
+        return None
+    if not line:
+        return None
+    return _resolve_plugin_install_choice(line, menu_rows, console)
 
 
 def main(
@@ -85,6 +221,7 @@ def main(
     now_provider = now_provider or datetime.now
     storage = storage or PetStorage(base_dir=_storage_dir_from_env())
     console = Console(file=output, width=100)
+    _init_plugins(storage)
 
     pet_state = storage.load()
     if pet_state is not None:
@@ -93,6 +230,131 @@ def main(
 
     if args.command == "graveyard":
         console.print(render_graveyard_view(storage.load_graveyard()))
+        return 0
+
+    if args.command == "plugin":
+        if args.plugin_command == "list":
+            if not plugin_manager.plugins:
+                console.print("No plugins loaded.")
+                return 0
+            table = Table(show_header=True, header_style="bold")
+            table.add_column("Name")
+            table.add_column("Version")
+            table.add_column("Source")
+            table.add_column("Description")
+            for plugin in plugin_manager.plugins:
+                meta = plugin_manager.meta_for(plugin)
+                if meta and meta.kind == "entry_point":
+                    source_cell = f"entry:{meta.entry_name}"
+                    if meta.distribution:
+                        source_cell = f"{source_cell} ({meta.distribution})"
+                elif meta and meta.kind == "user_file" and meta.path:
+                    source_cell = f"file:{meta.path}"
+                elif meta and meta.kind == "manual":
+                    source_cell = "manual"
+                else:
+                    source_cell = "?"
+                table.add_row(plugin.name, plugin.version, source_cell, plugin.description)
+            console.print(table)
+            return 0
+
+        if args.plugin_command == "available":
+            loaded_entry_names: set[str] = set()
+            for plugin in plugin_manager.plugins:
+                meta = plugin_manager.meta_for(plugin)
+                if meta and meta.entry_name:
+                    loaded_entry_names.add(meta.entry_name)
+            eps = list_plugin_entry_point_specs()
+            if not eps:
+                console.print(
+                    "No cli_tamagotchi.plugins entry points in this environment. "
+                    f"Install: `tama plugin install` or `pip install {DISTRIBUTION_PIP_SPEC}`.",
+                )
+                return 0
+            table = Table(
+                title="cli_tamagotchi.plugins",
+                show_header=True,
+                header_style="bold",
+            )
+            table.add_column("Name")
+            table.add_column("Target")
+            table.add_column("Distribution")
+            table.add_column("Loaded")
+            for ep in eps:
+                dist = getattr(ep, "dist", None)
+                dist_name = ""
+                if dist is not None:
+                    try:
+                        dist_name = dist.metadata["Name"]
+                    except Exception:
+                        dist_name = ""
+                target_cell = getattr(ep, "value", None) or f"{ep.module}:{ep.attr}"
+                table.add_row(
+                    ep.name,
+                    target_cell,
+                    dist_name or "—",
+                    "yes" if ep.name in loaded_entry_names else "no",
+                )
+            console.print(table)
+            return 0
+
+        if args.plugin_command == "install":
+            picked = _prompt_plugin_install_pip_spec(getattr(args, "choice", None), console, input_stream)
+            if picked is None:
+                return 1
+            pip_spec, summary_key = picked
+            try:
+                completed = subprocess.run(
+                    [sys.executable, "-m", "pip", "install", pip_spec],
+                    capture_output=True,
+                    text=True,
+                )
+            except OSError as exc:
+                console.print(f"Could not run pip: {exc}", style="bold red")
+                return 1
+            if completed.stdout:
+                console.print(completed.stdout.rstrip())
+            if completed.stderr:
+                console.print(completed.stderr.rstrip())
+            if completed.returncode != 0:
+                console.print("pip install failed.", style="bold red")
+                return completed.returncode
+            console.print(
+                f"Installed package {pip_spec} (choice: {summary_key}). Restart `tama` to load plugins.",
+                style="bold green",
+            )
+            return 0
+
+        if args.plugin_command == "emit":
+            if pet_state is None:
+                console.print("No pet found. Hatch one in the TUI first.", style="bold red")
+                return 1
+            try:
+                data_payload = json.loads(args.data)
+            except json.JSONDecodeError:
+                console.print("Invalid JSON for --data.", style="bold red")
+                return 1
+            if not isinstance(data_payload, dict):
+                console.print("--data must be a JSON object.", style="bold red")
+                return 1
+            if args.plugin_target and not plugin_manager.plugins_matching(args.plugin_target):
+                console.print(
+                    f"No plugin matches {args.plugin_target!r}. Try `tama plugin list`.",
+                    style="bold red",
+                )
+                return 1
+            reconcile_state(pet_state, now_provider())
+            plugin_manager.emit(
+                "on_external_event",
+                target=args.plugin_target,
+                event_type=args.event_type,
+                data=data_payload,
+            )
+            storage.save(pet_state)
+            label = args.event_type
+            if args.plugin_target:
+                label = f"{label} -> {args.plugin_target}"
+            console.print(f"Emitted plugin event: {label}", style="bold green")
         return 0
 
     if not args.command:
@@ -407,6 +669,7 @@ def run_interactive_loop(
                 status_message = Text(f"{pet_state.name} hatched! A fresh start.", style="bold green")
                 continue
 
+
             result = apply_action(pet_state, command, now_provider())
             pet_state = result.pet_state
             storage.save(pet_state)
@@ -550,6 +813,7 @@ def _run_interactive_loop_fallback(
             selected_position = (0, 0)
             status_message = Text(f"{pet_state.name} hatched! A fresh start.", style="bold green")
             continue
+
 
         result = apply_action(pet_state, command, now_provider())
         pet_state = result.pet_state
@@ -696,6 +960,7 @@ def _normalize_action_input(raw_command: str) -> Optional[str]:
 
     if normalized_command in ("graveyard", "cemetery"):
         return "graveyard"
+
 
     return None
 

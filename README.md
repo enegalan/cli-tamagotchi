@@ -13,6 +13,7 @@
 - **Event log** stored with the pet state (trimmed to the most recent entries)
 - **ASCII sprites** with mood and stage-aware animation in the UI
 - **CLI subcommands** for quick actions, plus **`tama` alone** for the interactive loop
+- **Plugin system** with lifecycle hooks (`on_tick`, `on_event`, `on_action`, `on_external_event`, ...)
 
 ## Requirements
 
@@ -38,13 +39,18 @@ tama medicine
 tama logs
 tama new          # only when no living pet
 tama graveyard
+tama plugin emit my_event --data '{"k":"v"}'   # notify all plugins
 tama              # interactive UI
 ```
+
+Plugins are loaded when `tama` starts. To pick up plugin code changes, restart the command.
+
+Setup details: [integrations/README.md](integrations/README.md).
 
 Run without installing the console script:
 
 ```bash
-PYTHONPATH=src python3 -m cli_tamagotchi status
+PYTHONPATH=src:plugins python3 -m cli_tamagotchi status
 ```
 
 Use `tama -h` for built-in help on subcommands.
@@ -62,7 +68,7 @@ State lives under `~/.cli-tamagotchi/` by default (or under `CLI_TAMAGOTCHI_HOME
 ## Tests
 
 ```bash
-python3 -m unittest discover -s tests
+python3 -m pytest tests/
 ```
 
 ## Contributing

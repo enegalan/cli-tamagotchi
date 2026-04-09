@@ -6,6 +6,7 @@ from typing import Any
 
 from .characters import CHARACTER_STYLE_BY_NAME
 from .illnesses import illness_from_value
+from .plugins.manager import emit_plugin_event
 
 MAX_LOG_EVENTS = 50
 REACTION_ANIMATION_WINDOW = timedelta(seconds=2.8)
@@ -108,6 +109,7 @@ class PetState:
         if len(self.events) > MAX_LOG_EVENTS:
             self.events = self.events[-MAX_LOG_EVENTS:]
         self.updated_at = now
+        emit_plugin_event("on_event", pet_state=self, message=message, timestamp=now)
 
     def has_illness_id(self, illness_id: str) -> bool:
         return any(entry.illness_id == illness_id for entry in self.active_illnesses)

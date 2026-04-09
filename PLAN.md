@@ -30,17 +30,16 @@
 - [X] Color-coded stat bars for each stat
 - [X] Action menu with up to 8 actions (Feed, Play, Lights On/Off, Clean, Status, etc.)
 - [X] Event log with real-time updates
-- [ ] Screens:
+- [X] Screens:
   - [X] New Pet
   - [X] Help
   - [X] Graveyard
 
 ### Plugin System
 
-- [ ] BasePlugin class with lifecycle hooks: `onTick`, `onEvent`, `onExternalEvent`
-- [ ] Entry-point plugin discovery from `~/.cli-tamagotchi/plugins/`
-- [ ] Example plugin: modify stats, add events
-- [ ] Load/unload plugins dynamically without restarting CLI
+- [X] BasePlugin class with lifecycle hooks: `onTick`, `onEvent`, `onExternalEvent`
+- [X] Entry-point plugin discovery from `~/.cli-tamagotchi/plugins/`
+- [X] Example plugin: modify stats, add events
 
 ### CLI Commands (`tama`)
 
@@ -55,18 +54,13 @@
 - [X] `tama logs` — Show event log
 - [X] `tama graveyard` — View deceased pets
 
-### Mini-Games
-
-- [ ] Implement Play action mini-game (reaction/guess game)
-- [ ] Track mini-game score to affect Happiness stat
-
 ### Packaging
 
 - [ ] Prepare PyPI package for `cli-tamagotchi`
-- [ ] Documentation:
+- [X] Documentation:
   - [X] README,
   - [X] CLI help
-  - [ ] plugin guide
+  - [X] plugin guide
 
 ---
 

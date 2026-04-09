@@ -23,11 +23,29 @@ dependencies = [
     "rich",
 ]
 
+[project.optional-dependencies]
+claude-code = []
+agents = []
+
 [project.scripts]
 tama = "cli_tamagotchi.cli:main"
+tama-hook = "cli_tamagotchi.plugins.hooks:tama_hook_main"
+
+[project.entry-points."cli_tamagotchi.plugins"]
+claude_code = "claude_code.plugin:ClaudeCodePlugin"
+
+[project.entry-points."cli_tamagotchi.hook_builders"]
+claude_code = "claude_code.plugin:build_hook_event"
 
 [tool.setuptools]
-package-dir = { "" = "src" }
+package-dir = {
+    "" = "src",
+    "claude_code" = "plugins/claude_code",
+}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "plugins"]
+testpaths = ["tests"]
