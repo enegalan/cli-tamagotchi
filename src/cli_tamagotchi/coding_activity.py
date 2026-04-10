@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
+from typing import Any
 
 from .models import PetState, clamp_stat
 
@@ -64,6 +67,43 @@ def apply_coding_activity_reaction(
     if log_event:
         body = _LOG_LINES[activity].format(name=pet_state.name)
         pet_state.add_event(f"{CODING_TAG_PREFIX}{activity.value}{CODING_TAG_SUFFIX}{body}", now)
+
+
+def parse_coding_activity(value: object) -> CodingActivity | None:
+    """Resolve a string to a member (e.g. from JSON or CLI); unknown values return None."""
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower().replace("-", "_")
+    for member in CodingActivity:
+        if member.value == normalized:
+            return member
+    return None
+
+
+def drain_activity_jsonl(
+    path: Path,
+    pet_state: PetState,
+    when: datetime,
+    previous_line_count: int,
+) -> int:
+    """Apply reactions for new JSONL lines (``activity`` + optional ``silent``). Returns total line count."""
+    if not path.exists():
+        return previous_line_count
+    lines = path.read_text(encoding="utf-8").splitlines()
+    total = len(lines)
+    for line in lines[previous_line_count:]:
+        try:
+            obj: Any = json.loads(line)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(obj, dict):
+            continue
+        activity = parse_coding_activity(obj.get("activity"))
+        if activity is None:
+            continue
+        silent = bool(obj.get("silent"))
+        apply_coding_activity_reaction(pet_state, activity, when, log_event=not silent)
+    return total
 
 
 def coding_reaction_pose_id(message_lower: str) -> str | None:

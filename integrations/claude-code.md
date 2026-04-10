@@ -116,7 +116,8 @@ tail -n 10 ~/.cli-tamagotchi/claude_events.jsonl
 | `tama-hook pre-tool <tool>` | Before any tool call | Logs tool usage for behavior classification |
 | `tama-hook post-tool <tool> <exit> [command...]` | After a tool returns | Updates session behavior and outcomes |
 | `tama-hook stop <reason>` | When session ends | Emits final session event |
-| `tama-hook subagent-start` | When a subagent starts | Logged as exploration-style activity |
+| `tama-hook subagent-start` | When a subagent starts | `sub_agent_spawned` reaction |
+| `tama-hook claude activity <slug>` | Manual / scripts | Same slugs as core `CodingActivity` (e.g. `tests_passed`) |
 
 ## Behavioral states
 
@@ -126,7 +127,7 @@ The plugin classifies your session as:
 - **LOOPING**: repeated tool usage patterns
 - **EXPLORING**: mostly read/search activity
 - **BLOCKED**: repeated tool failures
-- **DONE**: session stop event processed
+- **WORKING**: neutral baseline (no periodic stat nudge)
 
 ## Requires
 

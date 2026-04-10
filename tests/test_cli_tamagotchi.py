@@ -32,7 +32,7 @@ from cli_tamagotchi.cli import (
     main,
 )
 from cli_tamagotchi.characters import CHARACTER_POOL, roll_starting_character
-from cli_tamagotchi.coding_activity import CodingActivity, apply_coding_activity_reaction
+from cli_tamagotchi.coding_activity import CodingActivity, apply_coding_activity_reaction, parse_coding_activity
 from cli_tamagotchi.engine import TICK_MINUTES, apply_action, create_new_pet, reconcile_state
 from cli_tamagotchi.illnesses import Illness
 from cli_tamagotchi.models import (
@@ -962,6 +962,11 @@ class CliTamagotchiTests(unittest.TestCase):
         pet_state = create_new_pet(self.base_time, name="T")
         apply_coding_activity_reaction(pet_state, CodingActivity.BLOCKED, self.base_time)
         self.assertIsNone(pet_state.reaction_pose_id(self.base_time + timedelta(seconds=1)))
+
+    def test_parse_coding_activity_accepts_aliases(self) -> None:
+        self.assertEqual(parse_coding_activity("tests_passed"), CodingActivity.TESTS_PASSED)
+        self.assertEqual(parse_coding_activity("TESTS-PASSED"), CodingActivity.TESTS_PASSED)
+        self.assertIsNone(parse_coding_activity("nope"))
 
     def test_apply_coding_activity_reaction_no_log_does_not_append(self) -> None:
         pet_state = create_new_pet(self.base_time, name="T")

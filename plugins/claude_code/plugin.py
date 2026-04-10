@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from cli_tamagotchi.coding_activity import CodingActivity, apply_coding_activity_reaction
+from cli_tamagotchi.coding_activity import CodingActivity, apply_coding_activity_reaction, parse_coding_activity
 from cli_tamagotchi.models import PetState
 from cli_tamagotchi.plugins.base import BasePlugin
 
@@ -111,6 +111,12 @@ class ClaudeCodePlugin(BasePlugin):
                 pass
 
     def _process_event(self, pet_state: PetState, event: dict[str, Any], when: datetime) -> None:
+        if not event.get("type") and "activity" in event:
+            direct = parse_coding_activity(event.get("activity"))
+            if direct is not None:
+                apply_coding_activity_reaction(pet_state, direct, when)
+                return
+
         etype = event.get("type", "")
         if etype == "pre_tool":
             return
@@ -144,6 +150,16 @@ def build_hook_event(args: list[str]) -> tuple[Path, dict[str, object]] | None:
 
     payload: dict[str, object] = {"ts": time.time()}
     command = args[0]
+
+    if command == "claude" and len(args) >= 3 and args[1].lower() == "activity":
+        activity = parse_coding_activity(args[2])
+        if activity is None:
+            return None
+        payload["activity"] = activity.value
+        path = ClaudeCodePlugin.events_jsonl_path()
+        if path is None:
+            return None
+        return (path, payload)
 
     if command == "pre-tool" and len(args) >= 2:
         payload.update({"type": "pre_tool", "tool": args[1]})

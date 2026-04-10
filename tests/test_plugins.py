@@ -148,3 +148,48 @@ class UserTickPlugin(BasePlugin):
         payload = json.loads(lines[0])
         self.assertEqual(payload["type"], "post_tool")
         self.assertEqual(payload["tool"], "bash")
+
+    def test_build_tool_hook_git_commit(self) -> None:
+        from git_tool.plugin import build_hook_event
+
+        plugin_manager.configure(self.temp_base)
+        result = build_hook_event(["git", "commit"])
+        self.assertIsNotNone(result)
+        path, payload = result
+        self.assertEqual(path.name, "git_events.jsonl")
+        self.assertEqual(payload["activity"], "shipping")
+
+    def test_git_tool_plugin_drains_jsonl(self) -> None:
+        from git_tool.plugin import GitToolPlugin
+
+        plugin_manager.configure(self.temp_base)
+        git_path = self.temp_base / "git_events.jsonl"
+        git_path.write_text('{"activity":"shipping"}\n', encoding="utf-8")
+        pet = create_new_pet(self.base_time, "T")
+        pet.happiness = 40
+        plug = GitToolPlugin()
+        plug.on_load()
+        plug.on_tick(pet, self.base_time)
+        self.assertGreater(pet.happiness, 40)
+
+    def test_claude_hook_claude_activity(self) -> None:
+        from claude_code.plugin import build_hook_event
+
+        old_argv = sys.argv
+        try:
+            plugin_manager.configure(self.temp_base)
+            sys.argv = ["tama-hook", "claude", "activity", "looping"]
+            from cli_tamagotchi.plugins.hooks import tama_hook_main
+
+            with patch(
+                "cli_tamagotchi.plugins.hooks._iter_hook_builders",
+                return_value=[build_hook_event],
+            ):
+                tama_hook_main()
+        finally:
+            sys.argv = old_argv
+
+        lines = (self.temp_base / "claude_events.jsonl").read_text(encoding="utf-8").strip().splitlines()
+        self.assertEqual(len(lines), 1)
+        payload = json.loads(lines[0])
+        self.assertEqual(payload["activity"], "looping")

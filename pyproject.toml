@@ -50,15 +50,27 @@ tama = "cli_tamagotchi.cli:main"
 tama-hook = "cli_tamagotchi.plugins.hooks:tama_hook_main"
 
 [project.entry-points."cli_tamagotchi.plugins"]
+ci_cd = "ci_cd.plugin:CiCdPlugin"
 claude_code = "claude_code.plugin:ClaudeCodePlugin"
+copilot = "copilot.plugin:CopilotPlugin"
+cursor_code = "cursor_code.plugin:CursorCodePlugin"
+git_tool = "git_tool.plugin:GitToolPlugin"
 
 [project.entry-points."cli_tamagotchi.hook_builders"]
+ci_cd = "ci_cd.plugin:build_hook_event"
 claude_code = "claude_code.plugin:build_hook_event"
+copilot = "copilot.plugin:build_hook_event"
+cursor_code = "cursor_code.plugin:build_hook_event"
+git_tool = "git_tool.plugin:build_hook_event"
 
 [tool.setuptools]
 package-dir = {
     "" = "src",
+    "ci_cd" = "plugins/ci_cd",
     "claude_code" = "plugins/claude_code",
+    "copilot" = "plugins/copilot",
+    "cursor_code" = "plugins/cursor_code",
+    "git_tool" = "plugins/git_tool",
 }
 
 [tool.setuptools.packages.find]

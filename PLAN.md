@@ -82,11 +82,11 @@
 
 ### AI Tool Plugins
 
-- [ ] Claude Code plugin — implement all behavior states
-- [ ] Cursor plugin — read agent JSONL logs
-- [ ] GitHub Copilot plugin — monitor completions
-- [ ] Git plugin — reactions to commits, merges, rebases
-- [ ] CI/CD plugin — celebrate pipelines, mourn failures
+- [X] Claude Code plugin — implement all behavior states
+- [X] Cursor plugin — read agent JSONL logs
+- [X] GitHub Copilot plugin — monitor completions
+- [X] Git plugin — reactions to commits, merges, rebases
+- [X] CI/CD plugin — celebrate pipelines, mourn failures
 
 ### Pet Memory
 
