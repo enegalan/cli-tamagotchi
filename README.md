@@ -27,14 +27,6 @@ pip install cli-tamagotchi
 
 ### Homebrew
 
-Install the formula file directly from GitHub (branch `main`):
-
-```bash
-brew install https://raw.githubusercontent.com/enegalan/cli-tamagotchi/main/Formula/cli-tamagotchi.rb
-```
-
-Optional: add the repo as a tap if you want `brew upgrade cli-tamagotchi` to track it:
-
 ```bash
 brew tap enegalan/cli-tamagotchi https://github.com/enegalan/cli-tamagotchi
 brew install cli-tamagotchi
@@ -51,7 +43,10 @@ pip install -e .
 ### CLI (`tama`)
 
 ```bash
+tama --version
 tama status
+tama status --name Mittens    # save or graveyard
+tama status --name            # picker (TTY); without TTY, lists options and exits
 tama feed
 tama play
 tama lights
@@ -60,6 +55,10 @@ tama medicine
 tama logs
 tama new          # only when no living pet
 tama graveyard
+tama share                    # ASCII pet card to stdout
+tama share --copy             # same card to clipboard (pbcopy / wl-copy / xclip / clip)
+tama share --save             # <name>_card.txt in cwd
+tama share --name Mittens     # current pet or graveyard by name
 tama plugin emit my_event --data '{"k":"v"}'   # notify all plugins
 tama              # interactive UI
 ```

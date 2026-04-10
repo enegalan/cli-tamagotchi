@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 import random
 import sys
 import tempfile
@@ -41,7 +42,7 @@ from cli_tamagotchi.models import (
     STAGE_CHILD,
     STAGE_DEAD,
 )
-from cli_tamagotchi.render import render_event_log, render_status
+from cli_tamagotchi.render import render_event_log, render_share_card_plain, render_status
 from cli_tamagotchi.sprites import FRAME_INTERVAL_MS, get_sprite_lines
 from cli_tamagotchi.graveyard import GraveyardEntry, write_graveyard
 from cli_tamagotchi.storage import PetStorage
@@ -110,6 +111,95 @@ class CliTamagotchiTests(unittest.TestCase):
         assert persisted_pet is not None
         self.assertEqual(persisted_pet.name, "Qubit")
 
+    def test_version_flag_exits_zero(self) -> None:
+        with self.assertRaises(SystemExit) as ctx:
+            main(
+                argv=["--version"],
+                storage=self.storage,
+                now_provider=lambda: self.base_time,
+            )
+        self.assertEqual(ctx.exception.code, 0)
+
+    @patch("cli_tamagotchi.engine.roll_starting_character", return_value="Cat")
+    def test_status_with_name_matches_alive_pet(self, _mock_roll: object) -> None:
+        pet_state = create_new_pet(self.base_time, name="Rex")
+        self.storage.save(pet_state)
+        stdout = io.StringIO()
+        exit_code = main(
+            argv=["status", "--name", "Rex"],
+            storage=self.storage,
+            now_provider=lambda: self.base_time,
+            output=stdout,
+            input_stream=io.StringIO(""),
+        )
+        self.assertEqual(exit_code, 0)
+        self.assertIn("Rex", stdout.getvalue())
+
+    @patch("cli_tamagotchi.engine.roll_starting_character", return_value="Cat")
+    def test_status_with_unknown_name_returns_error(self, _mock_roll: object) -> None:
+        pet_state = create_new_pet(self.base_time, name="Rex")
+        self.storage.save(pet_state)
+        stdout = io.StringIO()
+        exit_code = main(
+            argv=["status", "--name", "Nobody"],
+            storage=self.storage,
+            now_provider=lambda: self.base_time,
+            output=stdout,
+            input_stream=io.StringIO(""),
+        )
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Nobody", stdout.getvalue())
+
+    @patch("cli_tamagotchi.engine.roll_starting_character", return_value="Cat")
+    def test_status_name_picker_selects_first_row(self, _mock_roll: object) -> None:
+        pet_state = create_new_pet(self.base_time, name="Rex")
+        self.storage.save(pet_state)
+        stdout = io.StringIO()
+        exit_code = main(
+            argv=["status", "--name"],
+            storage=self.storage,
+            now_provider=lambda: self.base_time,
+            output=stdout,
+            input_stream=TtyStringIO("1\n"),
+        )
+        self.assertEqual(exit_code, 0)
+        self.assertIn("Rex", stdout.getvalue())
+
+    @patch("cli_tamagotchi.engine.roll_starting_character", return_value="Cat")
+    def test_status_name_picker_empty_storage_returns_error(self, _mock_roll: object) -> None:
+        stdout = io.StringIO()
+        exit_code = main(
+            argv=["status", "--name"],
+            storage=self.storage,
+            now_provider=lambda: self.base_time,
+            output=stdout,
+            input_stream=TtyStringIO("1\n"),
+        )
+        self.assertEqual(exit_code, 1)
+        self.assertIn("No pets", stdout.getvalue())
+
+    def test_status_with_name_matches_graveyard_only(self) -> None:
+        entry = GraveyardEntry(
+            name="Ghost",
+            character="Cat",
+            stage="Dead",
+            created_at=self.base_time - timedelta(days=1),
+            died_at=self.base_time,
+        )
+        write_graveyard(self.storage.graveyard_path, [entry])
+        stdout = io.StringIO()
+        exit_code = main(
+            argv=["status", "--name", "Ghost"],
+            storage=self.storage,
+            now_provider=lambda: self.base_time,
+            output=stdout,
+            input_stream=io.StringIO(""),
+        )
+        self.assertEqual(exit_code, 0)
+        out = stdout.getvalue()
+        self.assertIn("Ghost", out)
+        self.assertIn("Graveyard snapshot", out)
+
     @patch("cli_tamagotchi.cli.pick_random_pet_name", return_value="Nova")
     @patch("cli_tamagotchi.engine.roll_starting_character", return_value="Cat")
     def test_logs_command_prints_event_log(self, _mock_roll: object, _mock_name: object) -> None:
@@ -130,6 +220,176 @@ class CliTamagotchiTests(unittest.TestCase):
         self.assertIn("Nova", output_text)
         self.assertIn("Custom test event.", output_text)
         self.assertIn("hatched", output_text.lower())
+
+    @patch("cli_tamagotchi.cli.pick_random_pet_name", return_value="Nova")
+    @patch("cli_tamagotchi.engine.roll_starting_character", return_value="Cat")
+    def test_share_command_prints_plain_card(self, _mock_roll: object, _mock_name: object) -> None:
+        pet_state = create_new_pet(self.base_time, name="Ribbon")
+        self.storage.save(pet_state)
+        stdout = io.StringIO()
+        exit_code = main(
+            argv=["share"],
+            storage=self.storage,
+            now_provider=lambda: self.base_time,
+            output=stdout,
+            input_stream=io.StringIO(""),
+        )
+        self.assertEqual(exit_code, 0)
+        output_text = stdout.getvalue()
+        self.assertIn("cli-tamagotchi pet card", output_text)
+        self.assertIn("Ribbon", output_text)
+        self.assertIn("Hunger", output_text)
+        self.assertIn("Character", output_text)
+
+    def test_share_without_pet_errors(self) -> None:
+        stdout = io.StringIO()
+        exit_code = main(
+            argv=["share"],
+            storage=self.storage,
+            now_provider=lambda: self.base_time,
+            output=stdout,
+            input_stream=io.StringIO(""),
+        )
+        self.assertEqual(exit_code, 1)
+        self.assertIn("No pet found", stdout.getvalue())
+
+    @patch("cli_tamagotchi.cli.pick_random_pet_name", return_value="Nova")
+    @patch("cli_tamagotchi.engine.roll_starting_character", return_value="Cat")
+    def test_share_save_writes_file(self, _mock_roll: object, _mock_name: object) -> None:
+        pet_state = create_new_pet(self.base_time, name="Mint Chip")
+        self.storage.save(pet_state)
+        stdout = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(tmp_path)
+                exit_code = main(
+                    argv=["share", "--save"],
+                    storage=self.storage,
+                    now_provider=lambda: self.base_time,
+                    output=stdout,
+                    input_stream=io.StringIO(""),
+                )
+            finally:
+                os.chdir(old_cwd)
+            self.assertEqual(exit_code, 0)
+            saved = tmp_path / "Mint_Chip_card.txt"
+            self.assertTrue(saved.is_file())
+            content = saved.read_text(encoding="utf-8")
+            self.assertIn("Mint Chip", content)
+            self.assertIn("cli-tamagotchi pet card", content)
+        self.assertIn("Wrote pet card", stdout.getvalue())
+
+    @patch("cli_tamagotchi.cli.pick_random_pet_name", return_value="Nova")
+    @patch("cli_tamagotchi.engine.roll_starting_character", return_value="Cat")
+    def test_share_by_name_graveyard(self, _mock_roll: object, _mock_name: object) -> None:
+        pet_state = create_new_pet(self.base_time, name="Alive")
+        self.storage.save(pet_state)
+        entry = GraveyardEntry(
+            name="Gone",
+            character="Cat",
+            stage=STAGE_DEAD,
+            created_at=self.base_time - timedelta(days=30),
+            died_at=self.base_time - timedelta(days=1),
+        )
+        write_graveyard(self.storage.graveyard_path, [entry])
+        stdout = io.StringIO()
+        exit_code = main(
+            argv=["share", "--name", "Gone"],
+            storage=self.storage,
+            now_provider=lambda: self.base_time,
+            output=stdout,
+            input_stream=io.StringIO(""),
+        )
+        self.assertEqual(exit_code, 0)
+        output_text = stdout.getvalue()
+        self.assertIn("in memoriam", output_text)
+        self.assertIn("Gone", output_text)
+
+    @patch("cli_tamagotchi.cli.pick_random_pet_name", return_value="Nova")
+    @patch("cli_tamagotchi.engine.roll_starting_character", return_value="Cat")
+    def test_share_unknown_name_errors(self, _mock_roll: object, _mock_name: object) -> None:
+        pet_state = create_new_pet(self.base_time, name="Alive")
+        self.storage.save(pet_state)
+        stdout = io.StringIO()
+        exit_code = main(
+            argv=["share", "--name", "Nobody"],
+            storage=self.storage,
+            now_provider=lambda: self.base_time,
+            output=stdout,
+            input_stream=io.StringIO(""),
+        )
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Nobody", stdout.getvalue())
+
+    def test_share_by_name_graveyard_without_pet_file(self) -> None:
+        self.storage.ensure_dir()
+        entry = GraveyardEntry(
+            name="Ghost",
+            character="Cat",
+            stage=STAGE_DEAD,
+            created_at=self.base_time - timedelta(days=5),
+            died_at=self.base_time - timedelta(days=1),
+        )
+        write_graveyard(self.storage.graveyard_path, [entry])
+        self.assertFalse(self.storage.exists())
+        stdout = io.StringIO()
+        exit_code = main(
+            argv=["share", "--name", "Ghost"],
+            storage=self.storage,
+            now_provider=lambda: self.base_time,
+            output=stdout,
+            input_stream=io.StringIO(""),
+        )
+        self.assertEqual(exit_code, 0)
+        self.assertIn("Ghost", stdout.getvalue())
+        self.assertIn("in memoriam", stdout.getvalue())
+
+    @patch("cli_tamagotchi.cli._copy_card_to_clipboard")
+    @patch("cli_tamagotchi.cli.pick_random_pet_name", return_value="Nova")
+    @patch("cli_tamagotchi.engine.roll_starting_character", return_value="Cat")
+    def test_share_copy_invokes_clipboard(
+        self,
+        _mock_roll: object,
+        _mock_name: object,
+        mock_clipboard: MagicMock,
+    ) -> None:
+        pet_state = create_new_pet(self.base_time, name="Clipper")
+        self.storage.save(pet_state)
+        stdout = io.StringIO()
+        exit_code = main(
+            argv=["share", "--copy"],
+            storage=self.storage,
+            now_provider=lambda: self.base_time,
+            output=stdout,
+            input_stream=io.StringIO(""),
+        )
+        self.assertEqual(exit_code, 0)
+        mock_clipboard.assert_called_once()
+        out = stdout.getvalue()
+        self.assertIn("Copied pet card to clipboard", out)
+        self.assertNotIn("cli-tamagotchi pet card", out)
+
+    def test_render_share_card_plain_for_pet_has_stats_lines(self) -> None:
+        pet_state = create_new_pet(self.base_time, name="Zed")
+        text = render_share_card_plain(pet_state, animation_time=self.base_time)
+        self.assertIn("Zed", text)
+        self.assertIn("Energy", text)
+        self.assertIn("[", text)
+
+    def test_render_share_card_plain_for_graveyard(self) -> None:
+        entry = GraveyardEntry(
+            name="Mem",
+            character="Cat",
+            stage=STAGE_DEAD,
+            created_at=self.base_time - timedelta(days=10),
+            died_at=self.base_time,
+        )
+        text = render_share_card_plain(entry, animation_time=self.base_time)
+        self.assertIn("Mem", text)
+        self.assertIn("in memoriam", text)
+        self.assertIn("graveyard", text.lower())
 
     def test_render_event_log_lists_all_events_in_order(self) -> None:
         pet_state = create_new_pet(self.base_time, name="Zed")

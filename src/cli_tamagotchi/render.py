@@ -12,9 +12,9 @@ from rich.text import Text
 from .characters import character_status_label
 from .engine import TICK_MINUTES
 from .graveyard import GraveyardEntry
+from .sprites import get_sprite_lines
 from .illnesses import ILLNESS_DEFINITION_BY_ENUM, illness_from_value
 from .models import CHARACTER_STYLE_BY_NAME, STAGE_DEAD, STAGE_EGG, STAGE_STYLE_BY_NAME, PetState
-from .sprites import get_sprite_lines
 
 STAT_BAR_FILL_HIGH = {
     "hunger": "bright_yellow",
@@ -211,6 +211,90 @@ def render_status(
         )
     )
     return Group(*sections)
+
+
+def render_graveyard_status_compact(
+    entry: GraveyardEntry,
+    animation_time: datetime | None = None,
+):
+    raw_sprite_lines = get_sprite_lines(
+        entry.character,
+        STAGE_DEAD,
+        "dead",
+        False,
+        animation_time=animation_time,
+        death_morph_stage=None,
+    )
+    sprite_indent = min(len(line) - len(line.lstrip(" ")) for line in raw_sprite_lines if line.strip())
+    sprite_lines = [line[sprite_indent:] for line in raw_sprite_lines]
+    sprite_width = max(len(line) for line in sprite_lines)
+    stats_row_count = 6
+    status_panel_height = max(len(sprite_lines), stats_row_count) + 2
+    sprite_inner_height = status_panel_height - 2
+    sprite_vertical_gap = max(0, sprite_inner_height - len(sprite_lines))
+    sprite_top_padding = sprite_vertical_gap // 2
+    sprite_bottom_padding = sprite_vertical_gap - sprite_top_padding
+    centered_sprite_lines = ([""] * sprite_top_padding) + sprite_lines + ([""] * sprite_bottom_padding)
+
+    sprite_panel = Panel(
+        Align.center(
+            Text("\n".join(centered_sprite_lines)),
+        ),
+        title=Text(f"{entry.name} · in memoriam", style="magenta"),
+        border_style=_mood_style("dead"),
+        height=status_panel_height,
+        box=box.ROUNDED,
+        padding=(0, 1),
+    )
+
+    stats_table = Table.grid(expand=True, padding=(0, 1))
+    stats_table.add_column(justify="left", no_wrap=True)
+    stats_table.add_column(justify="left", ratio=1)
+    stats_table.add_column(justify="right", no_wrap=True)
+    stats_table.add_row(
+        Text("Character", style="bold"),
+        Text(
+            character_status_label(entry.character),
+            style=CHARACTER_STYLE_BY_NAME.get(entry.character, "white"),
+        ),
+        Text(""),
+    )
+    stats_table.add_row(
+        Text("Stage", style="bold"),
+        Text(f"{entry.stage}", style=STAGE_STYLE_BY_NAME.get(entry.stage, "white")),
+        Text(""),
+    )
+    stats_table.add_row(
+        Text("Born", style="bold"),
+        Text(entry.created_at.strftime("%Y-%m-%d %H:%M"), style="white"),
+        Text(""),
+    )
+    stats_table.add_row(
+        Text("Died", style="bold"),
+        Text(entry.died_at.strftime("%Y-%m-%d %H:%M"), style="white"),
+        Text(""),
+    )
+    stats_table.add_row(
+        Text("Note", style="bold"),
+        Text("Graveyard snapshot; live stats were not stored.", style="dim"),
+        Text(""),
+    )
+
+    stats_panel = Panel(
+        Align.left(stats_table, vertical="middle"),
+        title="Stats",
+        border_style="dim",
+        height=status_panel_height,
+        expand=True,
+        box=box.ROUNDED,
+        padding=(0, 1),
+    )
+
+    status_grid = Table.grid(expand=True, padding=(0, 1))
+    status_grid.add_column(width=sprite_width + 6)
+    status_grid.add_column(ratio=1)
+    status_grid.add_row(sprite_panel, stats_panel)
+    return Group(status_grid)
 
 
 def render_event_log(pet_state: PetState) -> Panel:
@@ -549,3 +633,119 @@ def _lights_action_name(pet_state: PetState) -> str:
     if pet_state.is_asleep:
         return "lights_on"
     return "lights_off"
+
+
+def _share_plain_stat_bar(value: int) -> str:
+    filled_units = max(0, min(10, round(value / 10)))
+    return f"[{'#' * filled_units}{'-' * (10 - filled_units)}]"
+
+
+def _share_sprite_lines_pet(pet_state: PetState, animation_time: datetime | None) -> list[str]:
+    mood = pet_state.mood()
+    reaction_pose = pet_state.reaction_pose_id(animation_time)
+    raw_sprite_lines = get_sprite_lines(
+        pet_state.character,
+        pet_state.stage,
+        mood,
+        pet_state.is_asleep,
+        reaction_pose=reaction_pose,
+        animation_time=animation_time,
+        death_morph_stage=pet_state.death_morph_stage if pet_state.stage == STAGE_DEAD else None,
+    )
+    sprite_indent = min(len(line) - len(line.lstrip(" ")) for line in raw_sprite_lines if line.strip())
+    return [line[sprite_indent:] for line in raw_sprite_lines]
+
+
+def _share_sprite_lines_graveyard(entry: GraveyardEntry, animation_time: datetime | None) -> list[str]:
+    raw_sprite_lines = get_sprite_lines(
+        entry.character,
+        STAGE_DEAD,
+        "dead",
+        False,
+        animation_time=animation_time,
+        death_morph_stage=None,
+    )
+    sprite_indent = min(len(line) - len(line.lstrip(" ")) for line in raw_sprite_lines if line.strip())
+    return [line[sprite_indent:] for line in raw_sprite_lines]
+
+
+def _share_format_line(label: str, value: str, width: int) -> str:
+    return f"{label:<{width}}{value}"
+
+
+def _render_share_card_pet_plain(pet_state: PetState, animation_time: datetime | None) -> str:
+    sprite_lines = _share_sprite_lines_pet(pet_state, animation_time)
+    sprite_width = max((len(s) for s in sprite_lines), default=0)
+    label_w = 12
+    illness_display, illness_hint = _illness_summary_columns(pet_state)
+    if illness_hint:
+        illness_display = f"{illness_display} ({illness_hint})"
+    state_label = "Asleep" if pet_state.is_asleep else "Awake"
+    life = "alive" if pet_state.is_alive else "passed on"
+    title = f"cli-tamagotchi pet card · {pet_state.name} ({life})"
+    stat_lines = [
+        _share_format_line("Character", character_status_label(pet_state.character), label_w),
+        _share_format_line(
+            "Stage",
+            f"{pet_state.stage} (age {pet_state.stage_age_hours()}h)",
+            label_w,
+        ),
+        _share_format_line("Weight", str(pet_state.weight), label_w),
+        _share_format_line("State", state_label, label_w),
+        _share_format_line("Dirtiness", f"{pet_state.dirtiness}/3", label_w),
+        _share_format_line("Illness", illness_display, label_w),
+        _share_format_line("Hunger", f"{_share_plain_stat_bar(pet_state.hunger)} {pet_state.hunger}/100", label_w),
+        _share_format_line(
+            "Happiness",
+            f"{_share_plain_stat_bar(pet_state.happiness)} {pet_state.happiness}/100",
+            label_w,
+        ),
+        _share_format_line("Health", f"{_share_plain_stat_bar(pet_state.health)} {pet_state.health}/100", label_w),
+        _share_format_line("Energy", f"{_share_plain_stat_bar(pet_state.energy)} {pet_state.energy}/100", label_w),
+    ]
+    stats_width = max(len(line) for line in stat_lines)
+    inner_width = max(len(title), sprite_width, stats_width, 40)
+    rule = "=" * inner_width
+    lines_out: list[str] = [rule, title.center(inner_width), rule, ""]
+    for sl in sprite_lines:
+        lines_out.append(sl.center(inner_width))
+    lines_out.append("")
+    lines_out.append("-" * inner_width)
+    lines_out.extend(stat_lines)
+    lines_out.append(rule)
+    return "\n".join(lines_out)
+
+
+def _render_share_card_graveyard_plain(entry: GraveyardEntry, animation_time: datetime | None) -> str:
+    sprite_lines = _share_sprite_lines_graveyard(entry, animation_time)
+    sprite_width = max((len(s) for s in sprite_lines), default=0)
+    label_w = 12
+    title = f"cli-tamagotchi pet card · {entry.name} (in memoriam)"
+    stat_lines = [
+        _share_format_line("Character", character_status_label(entry.character), label_w),
+        _share_format_line("Stage", entry.stage, label_w),
+        _share_format_line("Born", entry.created_at.strftime("%Y-%m-%d"), label_w),
+        _share_format_line("Died", entry.died_at.strftime("%Y-%m-%d %H:%M"), label_w),
+        _share_format_line("Note", "Full stats are not stored for graveyard pets.", label_w),
+    ]
+    stats_width = max(len(line) for line in stat_lines)
+    inner_width = max(len(title), sprite_width, stats_width, 40)
+    rule = "=" * inner_width
+    lines_out: list[str] = [rule, title.center(inner_width), rule, ""]
+    for sl in sprite_lines:
+        lines_out.append(sl.center(inner_width))
+    lines_out.append("")
+    lines_out.append("-" * inner_width)
+    lines_out.extend(stat_lines)
+    lines_out.append(rule)
+    return "\n".join(lines_out)
+
+
+def render_share_card_plain(
+    subject: PetState | GraveyardEntry,
+    *,
+    animation_time: datetime | None = None,
+) -> str:
+    if isinstance(subject, GraveyardEntry):
+        return _render_share_card_graveyard_plain(subject, animation_time)
+    return _render_share_card_pet_plain(subject, animation_time)

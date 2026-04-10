@@ -4,7 +4,9 @@ import argparse
 import importlib.metadata
 import json
 import os
+import re
 import select
+import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -18,14 +20,17 @@ from rich.text import Text
 
 from .engine import apply_action, create_new_pet, pick_random_pet_name, reconcile_state
 from .models import PetState
+from .graveyard import GraveyardEntry
 from .render import (
     GRAVEYARD_PAGE_SIZE,
     NAME_HATCH_MAX_CHARS,
     _lights_action_name,
     render_event_log,
+    render_graveyard_status_compact,
     render_graveyard_view,
     render_interactive_view,
     render_name_hatch_view,
+    render_share_card_plain,
     render_status,
 )
 from .plugins.manager import DISTRIBUTION_PIP_SPEC, list_plugin_entry_point_specs, plugin_manager
@@ -61,10 +66,31 @@ def build_action_grid(pet_state: PetState, storage: PetStorage) -> tuple[tuple[s
     return (("graveyard", "quit"),)
 
 
+def _package_version_string() -> str:
+    try:
+        return importlib.metadata.version("cli-tamagotchi")
+    except importlib.metadata.PackageNotFoundError:
+        return "0.0.0-dev"
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="tama", description="Care for your terminal pet.")
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {_package_version_string()}",
+    )
     subparsers = parser.add_subparsers(dest="command")
-    subparsers.add_parser("status", help="Show the current pet status.")
+    status_parser = subparsers.add_parser("status", help="Show pet status (current, by name, or pick from list).")
+    status_parser.add_argument(
+        "--name",
+        dest="status_name",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="PET",
+        help="Pet name (alive or graveyard). Use --name with no value to choose from a list.",
+    )
     subparsers.add_parser("feed", help="Feed your pet.")
     subparsers.add_parser("play", help="Play with your pet.")
     subparsers.add_parser("lights", help="Toggle the lights on or off.")
@@ -73,6 +99,27 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("new", help="Start a new pet (only if none is alive).")
     subparsers.add_parser("logs", help="Show the pet event log.")
     subparsers.add_parser("graveyard", help="List pets that have passed away.")
+    share_parser = subparsers.add_parser(
+        "share",
+        help="Print a shareable plain-text pet card (sprite + stats).",
+    )
+    share_parser.add_argument(
+        "--copy",
+        action="store_true",
+        help="Copy the card to the clipboard (pbcopy, wl-copy, xclip, or clip).",
+    )
+    share_parser.add_argument(
+        "--save",
+        action="store_true",
+        help="Write <name>_card.txt in the current directory.",
+    )
+    share_parser.add_argument(
+        "--name",
+        dest="share_name",
+        default=None,
+        metavar="PET",
+        help="Share a specific pet by name (current pet or graveyard).",
+    )
     plugin_parser = subparsers.add_parser("plugin", help="Plugin commands.")
     plugin_sub = plugin_parser.add_subparsers(dest="plugin_command", required=True)
     plugin_sub.add_parser("list", help="List plugins loaded in this process.")
@@ -110,6 +157,140 @@ def build_parser() -> argparse.ArgumentParser:
         help="JSON object passed to plugins (default: {}).",
     )
     return parser
+
+
+def _clipboard_command() -> Optional[list[str]]:
+    if sys.platform == "darwin" and shutil.which("pbcopy"):
+        return ["pbcopy"]
+    if os.environ.get("WAYLAND_DISPLAY") and shutil.which("wl-copy"):
+        return ["wl-copy"]
+    if shutil.which("xclip"):
+        return ["xclip", "-selection", "clipboard"]
+    if sys.platform == "win32" and shutil.which("clip"):
+        return ["clip"]
+    return None
+
+
+def _copy_card_to_clipboard(text: str) -> None:
+    cmd = _clipboard_command()
+    if cmd is None:
+        raise RuntimeError(
+            "No clipboard utility found. On macOS use pbcopy; on Linux Wayland use wl-copy; "
+            "on X11 install xclip; on Windows use clip."
+        )
+    if sys.platform == "win32":
+        subprocess.run(cmd, input=text, text=True, encoding="utf-8", check=True)
+    else:
+        subprocess.run(cmd, input=text.encode("utf-8"), check=True)
+
+
+def _safe_share_card_filename(pet_name: str) -> str:
+    base = pet_name.strip() or "pet"
+    safe = re.sub(r"[^\w\-. ]+", "_", base, flags=re.UNICODE)
+    safe = re.sub(r"_+", "_", safe)
+    safe = safe.replace(" ", "_").strip("._") or "pet"
+    return f"{safe}_card.txt"
+
+
+def _resolve_share_subject(
+    pet_state: Optional[PetState],
+    graveyard: list[GraveyardEntry],
+    name: Optional[str],
+) -> tuple[Optional[PetState | GraveyardEntry], Optional[str]]:
+    if not name or not name.strip():
+        if pet_state is None:
+            return None, "No pet found. Hatch one first."
+        return pet_state, None
+    needle = name.strip().lower()
+    if pet_state is not None and pet_state.name.strip().lower() == needle:
+        return pet_state, None
+    matches = [entry for entry in graveyard if entry.name.strip().lower() == needle]
+    if not matches:
+        return None, f"No pet named {name.strip()!r} in your save or graveyard."
+    best = max(matches, key=lambda entry: entry.died_at)
+    return best, None
+
+
+def _share_card_display_name(subject: PetState | GraveyardEntry) -> str:
+    if isinstance(subject, GraveyardEntry):
+        return subject.name
+    return subject.name
+
+
+def _graveyard_entries_for_status_selector(
+    pet_state: Optional[PetState],
+    graveyard: list[GraveyardEntry],
+) -> list[GraveyardEntry]:
+    if pet_state is None or pet_state.is_alive:
+        return list(graveyard)
+    result: list[GraveyardEntry] = []
+    skipped_duplicate = False
+    for entry in graveyard:
+        if (
+            not skipped_duplicate
+            and entry.name.strip().lower() == pet_state.name.strip().lower()
+            and entry.died_at == pet_state.stage_started_at
+        ):
+            skipped_duplicate = True
+            continue
+        result.append(entry)
+    return result
+
+
+def _build_status_selector_rows(
+    pet_state: Optional[PetState],
+    graveyard: list[GraveyardEntry],
+) -> list[tuple[str, PetState | GraveyardEntry]]:
+    rows: list[tuple[str, PetState | GraveyardEntry]] = []
+    if pet_state is not None:
+        if pet_state.is_alive:
+            rows.append((f"{pet_state.name} · alive", pet_state))
+        else:
+            rows.append((f"{pet_state.name} · current save (passed)", pet_state))
+    filtered = _graveyard_entries_for_status_selector(pet_state, graveyard)
+    for entry in sorted(filtered, key=lambda e: e.died_at, reverse=True):
+        rows.append((f"{entry.name} · died {entry.died_at.strftime('%Y-%m-%d %H:%M')}", entry))
+    return rows
+
+
+def _prompt_status_pet_selector(
+    pet_state: Optional[PetState],
+    graveyard: list[GraveyardEntry],
+    console: Console,
+    input_stream: TextIO,
+) -> Optional[PetState | GraveyardEntry]:
+    menu_rows = _build_status_selector_rows(pet_state, graveyard)
+    if not menu_rows:
+        console.print("No pets in save or graveyard.", style="bold red")
+        return None
+    if not input_stream.isatty():
+        console.print("No TTY: pass a pet name, e.g. `tama status --name Nova`.", style="bold red")
+        console.print("Options:")
+        for i, (label, _) in enumerate(menu_rows, start=1):
+            console.print(f"  {i}) {label}")
+        return None
+    console.print("Choose a pet:")
+    for i, (label, _) in enumerate(menu_rows, start=1):
+        console.print(f"  {i}) {label}")
+    try:
+        line = input_stream.readline()
+    except Exception:
+        return None
+    if not line:
+        console.print("No selection.", style="bold red")
+        return None
+    needle = line.strip()
+    if not needle.isdigit():
+        console.print(
+            f"Invalid choice {needle!r}; enter a number from 1 to {len(menu_rows)}.",
+            style="bold red",
+        )
+        return None
+    idx = int(needle)
+    if not (1 <= idx <= len(menu_rows)):
+        console.print(f"Invalid index {idx}; use 1–{len(menu_rows)}.", style="bold red")
+        return None
+    return menu_rows[idx - 1][1]
 
 
 def _init_plugins(storage: PetStorage) -> None:
@@ -230,6 +411,44 @@ def main(
 
     if args.command == "graveyard":
         console.print(render_graveyard_view(storage.load_graveyard()))
+        return 0
+
+    if args.command == "share":
+        graveyard_entries = storage.load_graveyard()
+        subject, err = _resolve_share_subject(pet_state, graveyard_entries, getattr(args, "share_name", None))
+        if err is not None:
+            console.print(err, style="bold red")
+            return 1
+        assert subject is not None
+        card_text = render_share_card_plain(subject, animation_time=now_provider())
+        emit_stdout = not args.copy and not args.save
+        if emit_stdout:
+            output.write(card_text)
+            if not card_text.endswith("\n"):
+                output.write("\n")
+            output.flush()
+        if args.copy:
+            try:
+                _copy_card_to_clipboard(card_text)
+            except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
+                console.print(f"Could not copy to clipboard: {exc}", style="bold red")
+                return 1
+            if emit_stdout:
+                console.print("Also copied pet card to clipboard.", style="dim")
+            else:
+                console.print("Copied pet card to clipboard.", style="bold green")
+        if args.save:
+            filename = _safe_share_card_filename(_share_card_display_name(subject))
+            path = Path.cwd() / filename
+            try:
+                path.write_text(card_text + ("\n" if not card_text.endswith("\n") else ""), encoding="utf-8")
+            except OSError as exc:
+                console.print(f"Could not save card: {exc}", style="bold red")
+                return 1
+            if not emit_stdout:
+                console.print(f"Wrote pet card to {path}.", style="bold green")
+            else:
+                console.print(f"Also saved pet card to {path}.", style="dim")
         return 0
 
     if args.command == "plugin":
@@ -378,6 +597,37 @@ def main(
         storage.save(pet_state)
         console.print(f"A new pet, {pet_state.name}, has hatched.", style="bold green")
         console.print(render_status(pet_state, compact=True, animation_time=now_provider()))
+        return 0
+
+    status_name_arg = getattr(args, "status_name", None) if args.command == "status" else None
+    if status_name_arg is not None:
+        graveyard = storage.load_graveyard()
+        if status_name_arg == "":
+            chosen = _prompt_status_pet_selector(pet_state, graveyard, console, input_stream)
+            if chosen is None:
+                return 1
+            if isinstance(chosen, PetState):
+                reconcile_state(chosen, now_provider())
+                storage.save(chosen)
+                console.print(render_status(chosen, compact=True, animation_time=now_provider()))
+            else:
+                console.print(render_graveyard_status_compact(chosen, animation_time=now_provider()))
+            return 0
+        name_trimmed = status_name_arg.strip()
+        if not name_trimmed:
+            console.print("Use `tama status --name` alone for the pet picker, or pass a non-empty name.", style="bold red")
+            return 1
+        subject, resolve_error = _resolve_share_subject(pet_state, graveyard, name_trimmed)
+        if resolve_error:
+            console.print(resolve_error, style="bold red")
+            return 1
+        assert subject is not None
+        if isinstance(subject, PetState):
+            reconcile_state(subject, now_provider())
+            storage.save(subject)
+            console.print(render_status(subject, compact=True, animation_time=now_provider()))
+        else:
+            console.print(render_graveyard_status_compact(subject, animation_time=now_provider()))
         return 0
 
     if pet_state is None:
