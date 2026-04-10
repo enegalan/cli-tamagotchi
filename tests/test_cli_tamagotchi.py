@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import random
 import sys
@@ -199,6 +200,65 @@ class CliTamagotchiTests(unittest.TestCase):
         out = stdout.getvalue()
         self.assertIn("Ghost", out)
         self.assertIn("Graveyard snapshot", out)
+
+    @patch("cli_tamagotchi.engine.roll_starting_character", return_value="Cat")
+    def test_status_json_alive_pet(self, _mock_roll: object) -> None:
+        pet_state = create_new_pet(self.base_time, name="Rex")
+        self.storage.save(pet_state)
+        stdout = io.StringIO()
+        exit_code = main(
+            argv=["status", "--json", "--name", "Rex"],
+            storage=self.storage,
+            now_provider=lambda: self.base_time,
+            output=stdout,
+            input_stream=io.StringIO(""),
+        )
+        self.assertEqual(exit_code, 0)
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["kind"], "pet")
+        self.assertEqual(payload["mood"], pet_state.mood())
+        self.assertEqual(payload["pet"]["name"], "Rex")
+        self.assertEqual(payload["pet"]["character"], "Cat")
+        self.assertIn("character_label", payload)
+
+    def test_status_json_graveyard_entry(self) -> None:
+        entry = GraveyardEntry(
+            name="Ghost",
+            character="Cat",
+            stage="Dead",
+            created_at=self.base_time - timedelta(days=1),
+            died_at=self.base_time,
+        )
+        write_graveyard(self.storage.graveyard_path, [entry])
+        stdout = io.StringIO()
+        exit_code = main(
+            argv=["status", "--json", "--name", "Ghost"],
+            storage=self.storage,
+            now_provider=lambda: self.base_time,
+            output=stdout,
+            input_stream=io.StringIO(""),
+        )
+        self.assertEqual(exit_code, 0)
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["kind"], "graveyard")
+        self.assertEqual(payload["entry"]["name"], "Ghost")
+        self.assertIn("character_label", payload)
+
+    @patch("cli_tamagotchi.cli.pick_random_pet_name", return_value="Nova")
+    @patch("cli_tamagotchi.engine.roll_starting_character", return_value="Cat")
+    def test_status_json_default_pet(self, _mock_roll: object, _mock_name: object) -> None:
+        stdout = io.StringIO()
+        exit_code = main(
+            argv=["status", "--json"],
+            storage=self.storage,
+            now_provider=lambda: self.base_time,
+            output=stdout,
+            input_stream=io.StringIO(""),
+        )
+        self.assertEqual(exit_code, 0)
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["kind"], "pet")
+        self.assertEqual(payload["pet"]["name"], "Nova")
 
     @patch("cli_tamagotchi.cli.pick_random_pet_name", return_value="Nova")
     @patch("cli_tamagotchi.engine.roll_starting_character", return_value="Cat")

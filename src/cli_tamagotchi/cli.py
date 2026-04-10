@@ -11,13 +11,14 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Optional, Sequence, TextIO
+from typing import Any, Callable, Optional, Sequence, TextIO
 
 from rich.console import Console, Group
 from rich.live import Live
 from rich.table import Table
 from rich.text import Text
 
+from .characters import character_status_label
 from .engine import apply_action, create_new_pet, pick_random_pet_name, reconcile_state
 from .models import PetState
 from .graveyard import GraveyardEntry
@@ -90,6 +91,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="PET",
         help="Pet name (alive or graveyard). Use --name with no value to choose from a list.",
+    )
+    status_parser.add_argument(
+        "--json",
+        dest="status_json",
+        action="store_true",
+        help="Print status as JSON (pet or graveyard entry) instead of the TUI-style view.",
     )
     subparsers.add_parser("feed", help="Feed your pet.")
     subparsers.add_parser("play", help="Play with your pet.")
@@ -215,6 +222,41 @@ def _share_card_display_name(subject: PetState | GraveyardEntry) -> str:
     if isinstance(subject, GraveyardEntry):
         return subject.name
     return subject.name
+
+
+def _status_subject_json_object(subject: PetState | GraveyardEntry) -> dict[str, Any]:
+    if isinstance(subject, PetState):
+        return {
+            "kind": "pet",
+            "pet": subject.to_dict(),
+            "mood": subject.mood(),
+            "stage_age_hours": subject.stage_age_hours(),
+            "character_label": character_status_label(subject.character),
+        }
+    return {
+        "kind": "graveyard",
+        "entry": subject.to_dict(),
+        "character_label": character_status_label(subject.character),
+    }
+
+
+def _emit_status_view(
+    subject: PetState | GraveyardEntry,
+    *,
+    as_json: bool,
+    output: TextIO,
+    console: Console,
+    now: datetime,
+) -> None:
+    if as_json:
+        payload = _status_subject_json_object(subject)
+        output.write(json.dumps(payload, indent=2) + "\n")
+        output.flush()
+        return
+    if isinstance(subject, PetState):
+        console.print(render_status(subject, compact=True, animation_time=now))
+    else:
+        console.print(render_graveyard_status_compact(subject, animation_time=now))
 
 
 def _graveyard_entries_for_status_selector(
@@ -600,6 +642,7 @@ def main(
         return 0
 
     status_name_arg = getattr(args, "status_name", None) if args.command == "status" else None
+    status_as_json = bool(getattr(args, "status_json", False))
     if status_name_arg is not None:
         graveyard = storage.load_graveyard()
         if status_name_arg == "":
@@ -609,9 +652,14 @@ def main(
             if isinstance(chosen, PetState):
                 reconcile_state(chosen, now_provider())
                 storage.save(chosen)
-                console.print(render_status(chosen, compact=True, animation_time=now_provider()))
-            else:
-                console.print(render_graveyard_status_compact(chosen, animation_time=now_provider()))
+            now = now_provider()
+            _emit_status_view(
+                chosen,
+                as_json=status_as_json,
+                output=output,
+                console=console,
+                now=now,
+            )
             return 0
         name_trimmed = status_name_arg.strip()
         if not name_trimmed:
@@ -625,9 +673,14 @@ def main(
         if isinstance(subject, PetState):
             reconcile_state(subject, now_provider())
             storage.save(subject)
-            console.print(render_status(subject, compact=True, animation_time=now_provider()))
-        else:
-            console.print(render_graveyard_status_compact(subject, animation_time=now_provider()))
+        now = now_provider()
+        _emit_status_view(
+            subject,
+            as_json=status_as_json,
+            output=output,
+            console=console,
+            now=now,
+        )
         return 0
 
     if pet_state is None:
@@ -637,7 +690,14 @@ def main(
 
     if args.command == "status":
         storage.save(pet_state)
-        console.print(render_status(pet_state, compact=True, animation_time=now_provider()))
+        now = now_provider()
+        _emit_status_view(
+            pet_state,
+            as_json=status_as_json,
+            output=output,
+            console=console,
+            now=now,
+        )
         return 0
 
     if args.command == "logs":
