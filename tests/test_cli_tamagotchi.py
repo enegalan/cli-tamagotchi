@@ -65,8 +65,11 @@ class CliTamagotchiTests(unittest.TestCase):
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.storage = PetStorage(base_dir=Path(self.temporary_directory.name))
         self.base_time = datetime(2026, 4, 8, 12, 0, 0)
+        self._home_env = patch.dict(os.environ, {"CLI_TAMAGOTCHI_HOME": self.temporary_directory.name})
+        self._home_env.start()
 
     def tearDown(self) -> None:
+        self._home_env.stop()
         self.temporary_directory.cleanup()
 
     @patch("cli_tamagotchi.cli.pick_random_pet_name", return_value="Nova")
@@ -975,6 +978,28 @@ class CliTamagotchiTests(unittest.TestCase):
         apply_coding_activity_reaction(pet_state, CodingActivity.SHIPPING, self.base_time, log_event=False)
         self.assertEqual(len(pet_state.events), before_len)
         self.assertEqual(pet_state.happiness, 85)
+
+    def test_pet_memory_regression_after_two_prior_failures(self) -> None:
+        pet_state = create_new_pet(self.base_time, name="T")
+        t2 = self.base_time + timedelta(seconds=1)
+        t3 = self.base_time + timedelta(seconds=2)
+        with patch.dict(os.environ, {"CLI_TAMAGOTCHI_PROJECT": "myapp"}):
+            apply_coding_activity_reaction(pet_state, CodingActivity.TESTS_FAILED, self.base_time)
+            apply_coding_activity_reaction(pet_state, CodingActivity.TESTS_FAILED, t2)
+            apply_coding_activity_reaction(pet_state, CodingActivity.TESTS_FAILED, t3)
+        combined = " ".join(entry.message for entry in pet_state.events)
+        self.assertIn("rough lately", combined)
+        self.assertIn("myapp", combined)
+
+    def test_pet_memory_recall_contrast_within_window(self) -> None:
+        pet_state = create_new_pet(self.base_time, name="T")
+        t2 = self.base_time + timedelta(hours=1)
+        with patch.dict(os.environ, {"CLI_TAMAGOTCHI_PROJECT": "myapp"}):
+            apply_coding_activity_reaction(pet_state, CodingActivity.SHIPPING, self.base_time)
+            apply_coding_activity_reaction(pet_state, CodingActivity.EXPLORING, t2)
+        combined = " ".join(entry.message for entry in pet_state.events)
+        self.assertIn("recalls last time", combined)
+        self.assertIn("myapp", combined)
 
     def test_eating_sprite_differs_from_idle(self) -> None:
         now = datetime(2020, 1, 1, 12, 0, 0)

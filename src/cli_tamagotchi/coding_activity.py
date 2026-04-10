@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import PetState, clamp_stat
+from .pet_memory import followups_then_record, project_label
 
 # Log prefix so TUI can show a brief reaction pose without ambiguous substring matches.
 CODING_TAG_PREFIX = "[coding "
@@ -64,7 +65,17 @@ def apply_coding_activity_reaction(
     pet_state.happiness = clamp_stat(pet_state.happiness + happy_step * _HAPPY_SCALE)
     pet_state.hunger = clamp_stat(pet_state.hunger + hunger_step * _HUNGER_SCALE)
     pet_state.updated_at = now
+    label = project_label()
+    extras = followups_then_record(
+        pet_state.name,
+        now,
+        activity.value,
+        label,
+        emit_log=log_event,
+    )
     if log_event:
+        for note in extras:
+            pet_state.add_event(note, now)
         body = _LOG_LINES[activity].format(name=pet_state.name)
         pet_state.add_event(f"{CODING_TAG_PREFIX}{activity.value}{CODING_TAG_SUFFIX}{body}", now)
 

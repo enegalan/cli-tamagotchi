@@ -90,9 +90,9 @@
 
 ### Pet Memory
 
-- [ ] Long-term memory of project history
-- [ ] Reference past events in logs: "Last time you worked on X..."
-- [ ] Detect recurring errors and regressions
+- [X] Long-term memory of project history
+- [X] Reference past events in logs: "Last time you worked on X..."
+- [X] Detect recurring errors and regressions
 
 ---
 
