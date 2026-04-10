@@ -7,7 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from cli_tamagotchi.models import PetState, clamp_stat
+from cli_tamagotchi.coding_activity import CodingActivity, apply_coding_activity_reaction
+from cli_tamagotchi.models import PetState
 from cli_tamagotchi.plugins.base import BasePlugin
 
 
@@ -53,23 +54,13 @@ class AgentBehaviorClassifier:
         return "WORKING"
 
 
-BEHAVIOR_REACTIONS: dict[str, dict[str, int]] = {
-    "SHIPPING": {"happy_delta": 1, "hunger_delta": 0},
-    "LOOPING": {"happy_delta": -1, "hunger_delta": -1},
-    "EXPLORING": {"happy_delta": 0, "hunger_delta": 0},
-    "BLOCKED": {"happy_delta": -1, "hunger_delta": -1},
-    "WORKING": {"happy_delta": 0, "hunger_delta": 0},
-    "DONE_SUCCESS": {"happy_delta": 2, "hunger_delta": 1},
-    "DONE_FAILURE": {"happy_delta": -1, "hunger_delta": -1},
-    "TESTS_PASSED": {"happy_delta": 2, "hunger_delta": 1},
-    "TESTS_FAILED": {"happy_delta": -1, "hunger_delta": 0},
+_CLASSIFIER_BEHAVIOR_TO_ACTIVITY: dict[str, CodingActivity | None] = {
+    "SHIPPING": CodingActivity.SHIPPING,
+    "LOOPING": CodingActivity.LOOPING,
+    "EXPLORING": CodingActivity.EXPLORING,
+    "BLOCKED": CodingActivity.BLOCKED,
+    "WORKING": None,
 }
-
-
-def _apply_reaction(pet_state: PetState, key: str) -> None:
-    reaction = BEHAVIOR_REACTIONS.get(key, BEHAVIOR_REACTIONS["WORKING"])
-    pet_state.happiness = clamp_stat(pet_state.happiness + reaction["happy_delta"] * 15)
-    pet_state.hunger = clamp_stat(pet_state.hunger + reaction["hunger_delta"] * 12)
 
 
 class ClaudeCodePlugin(BasePlugin):
@@ -97,12 +88,14 @@ class ClaudeCodePlugin(BasePlugin):
             path.touch()
 
     def on_tick(self, pet_state: PetState, tick_time: datetime) -> None:
-        self._poll_events(pet_state)
+        self._poll_events(pet_state, tick_time)
         self._behavior_tick += 1
         if self._behavior_tick % 60 == 0:
-            _apply_reaction(pet_state, self._last_behavior)
+            activity = _CLASSIFIER_BEHAVIOR_TO_ACTIVITY.get(self._last_behavior)
+            if activity is not None:
+                apply_coding_activity_reaction(pet_state, activity, tick_time, log_event=False)
 
-    def _poll_events(self, pet_state: PetState) -> None:
+    def _poll_events(self, pet_state: PetState, when: datetime) -> None:
         path = self._event_path()
         if not path.exists():
             return
@@ -113,11 +106,11 @@ class ClaudeCodePlugin(BasePlugin):
         for line in new_lines:
             try:
                 event = json.loads(line)
-                self._process_event(pet_state, event)
+                self._process_event(pet_state, event, when)
             except (json.JSONDecodeError, TypeError, ValueError, KeyError):
                 pass
 
-    def _process_event(self, pet_state: PetState, event: dict[str, Any]) -> None:
+    def _process_event(self, pet_state: PetState, event: dict[str, Any], when: datetime) -> None:
         etype = event.get("type", "")
         if etype == "pre_tool":
             return
@@ -128,17 +121,17 @@ class ClaudeCodePlugin(BasePlugin):
             self._last_behavior = behavior
             if tool == "bash" and "pytest" in event.get("command", ""):
                 if exit_code == 0:
-                    _apply_reaction(pet_state, "TESTS_PASSED")
+                    apply_coding_activity_reaction(pet_state, CodingActivity.TESTS_PASSED, when)
                 else:
-                    _apply_reaction(pet_state, "TESTS_FAILED")
+                    apply_coding_activity_reaction(pet_state, CodingActivity.TESTS_FAILED, when)
         elif etype == "stop":
             reason = event.get("reason", "")
             if reason in ("task_complete", "success"):
-                _apply_reaction(pet_state, "DONE_SUCCESS")
+                apply_coding_activity_reaction(pet_state, CodingActivity.SHIPPING, when)
             else:
-                _apply_reaction(pet_state, "DONE_FAILURE")
+                apply_coding_activity_reaction(pet_state, CodingActivity.BLOCKED, when)
         elif etype == "subagent_start":
-            pet_state.happiness = clamp_stat(pet_state.happiness - 12)
+            apply_coding_activity_reaction(pet_state, CodingActivity.SUB_AGENT_SPAWNED, when)
 
     def on_external_event(self, event_type: str, data: dict[str, Any]) -> None:
         pass

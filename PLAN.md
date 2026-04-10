@@ -70,7 +70,7 @@
 
 ### Behavioral Classification
 
-- [ ] Define coding activity states:
+- [X] Define coding activity states:
   - Shipping
   - Looping
   - Exploring
@@ -78,7 +78,7 @@
   - Tests Passed
   - Tests Failed
   - Sub-agent Spawned
-- [ ] Map pet reactions to each state (animations, stat changes, event logs)
+- [X] Map pet reactions to each state (animations, stat changes, event logs)
 
 ### AI Tool Plugins
 

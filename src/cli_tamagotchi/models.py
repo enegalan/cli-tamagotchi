@@ -148,6 +148,11 @@ class PetState:
         if now - last_entry.timestamp > REACTION_ANIMATION_WINDOW:
             return None
         message_lower = last_entry.message.lower()
+        from .coding_activity import coding_reaction_pose_id
+
+        coding_pose = coding_reaction_pose_id(message_lower)
+        if coding_pose is not None:
+            return coding_pose
         if "you fed" in message_lower:
             return "eating"
         if "you played with" in message_lower:

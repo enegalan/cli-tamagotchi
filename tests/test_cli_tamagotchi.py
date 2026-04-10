@@ -32,6 +32,7 @@ from cli_tamagotchi.cli import (
     main,
 )
 from cli_tamagotchi.characters import CHARACTER_POOL, roll_starting_character
+from cli_tamagotchi.coding_activity import CodingActivity, apply_coding_activity_reaction
 from cli_tamagotchi.engine import TICK_MINUTES, apply_action, create_new_pet, reconcile_state
 from cli_tamagotchi.illnesses import Illness
 from cli_tamagotchi.models import (
@@ -951,6 +952,24 @@ class CliTamagotchiTests(unittest.TestCase):
         pet_state.is_asleep = True
         pet_state.add_event("You fed T.", self.base_time)
         self.assertIsNone(pet_state.reaction_pose_id(self.base_time + timedelta(seconds=1)))
+
+    def test_reaction_pose_id_coding_tests_passed_is_playing(self) -> None:
+        pet_state = create_new_pet(self.base_time, name="T")
+        apply_coding_activity_reaction(pet_state, CodingActivity.TESTS_PASSED, self.base_time)
+        self.assertEqual(pet_state.reaction_pose_id(self.base_time + timedelta(seconds=1)), "playing")
+
+    def test_reaction_pose_id_coding_blocked_has_no_pose(self) -> None:
+        pet_state = create_new_pet(self.base_time, name="T")
+        apply_coding_activity_reaction(pet_state, CodingActivity.BLOCKED, self.base_time)
+        self.assertIsNone(pet_state.reaction_pose_id(self.base_time + timedelta(seconds=1)))
+
+    def test_apply_coding_activity_reaction_no_log_does_not_append(self) -> None:
+        pet_state = create_new_pet(self.base_time, name="T")
+        pet_state.happiness = 70
+        before_len = len(pet_state.events)
+        apply_coding_activity_reaction(pet_state, CodingActivity.SHIPPING, self.base_time, log_event=False)
+        self.assertEqual(len(pet_state.events), before_len)
+        self.assertEqual(pet_state.happiness, 85)
 
     def test_eating_sprite_differs_from_idle(self) -> None:
         now = datetime(2020, 1, 1, 12, 0, 0)
